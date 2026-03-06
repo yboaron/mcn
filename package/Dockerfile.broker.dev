@@ -1,0 +1,14 @@
+ARG FEDORA_VERSION=42
+ARG SOURCE=/go/src/github.com/aswinsuryana/skynet
+
+FROM golang:1.25 AS builder
+ARG SOURCE
+WORKDIR ${SOURCE}
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /output/mcn-broker ./cmd/broker
+
+FROM fedora:${FEDORA_VERSION}
+COPY --from=builder /output/mcn-broker /usr/local/bin/mcn-broker
+ENTRYPOINT ["/usr/local/bin/mcn-broker"]

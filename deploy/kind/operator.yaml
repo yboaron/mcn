@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcn-operator
+  namespace: mcn-system
+  labels:
+    app.kubernetes.io/name: mcn
+    app.kubernetes.io/component: mcn-operator
+    app.kubernetes.io/managed-by: mcn-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcn
+      app.kubernetes.io/component: mcn-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcn
+        app.kubernetes.io/component: mcn-operator
+        app.kubernetes.io/managed-by: mcn-operator
+    spec:
+      serviceAccountName: mcn-operator
+      containers:
+        - name: mcn-operator
+          image: quay.io/aswinsuryan/skynet:mcn-operator-latest
+          imagePullPolicy: Never
+          env:
+            - name: RELATED_IMAGE_BROKER
+              value: quay.io/aswinsuryan/skynet:mcn-broker-latest
+            - name: RELATED_IMAGE_AGENT
+              value: quay.io/aswinsuryan/skynet:mcn-agent-latest
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

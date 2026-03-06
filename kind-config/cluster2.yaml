@@ -1,0 +1,16 @@
+# KIND cluster config for cluster2 (joining cluster)
+# Pod CIDR:     10.2.0.0/16  (/24 per node)
+# Service CIDR: 10.3.0.0/16
+# CNI: OVN-Kubernetes (IC mode) — installed separately via Helm
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cluster2
+networking:
+  podSubnet: "10.2.0.0/16"
+  serviceSubnet: "10.3.0.0/16"
+  disableDefaultCNI: true
+  kubeProxyMode: none
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

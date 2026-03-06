@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcn-operator
+  namespace: mcn-system
+  labels:
+    app.kubernetes.io/name: mcn
+    app.kubernetes.io/component: mcn-operator
+    app.kubernetes.io/managed-by: mcn-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcn-operator
+  labels:
+    app.kubernetes.io/name: mcn
+    app.kubernetes.io/component: mcn-operator
+    app.kubernetes.io/managed-by: mcn-operator
+rules:
+  # Operator manages broker and agent Deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Operator creates ServiceAccounts for broker and agent
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create"]
+  # Operator ensures its own namespace exists
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcn-operator
+  labels:
+    app.kubernetes.io/name: mcn
+    app.kubernetes.io/component: mcn-operator
+    app.kubernetes.io/managed-by: mcn-operator
+subjects:
+  - kind: ServiceAccount
+    name: mcn-operator
+    namespace: mcn-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mcn-operator

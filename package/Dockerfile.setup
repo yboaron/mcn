@@ -1,0 +1,50 @@
+# Setup container for MCN KIND cluster operations.
+# Contains: kind, kubectl, git, jq, pipx, jinjanate (required by ovn-k contrib/kind.sh).
+# Used by 'make kind-create' to run create-clusters.sh without requiring
+# these tools to be installed on the developer's host.
+#
+# Docker socket is bind-mounted at runtime so KIND talks to the host daemon.
+
+FROM fedora:latest
+
+RUN dnf install -y \
+        git \
+        curl \
+        tar \
+        which \
+        findutils \
+        jq \
+        python3 \
+        python3-pip \
+        pipx \
+    && dnf clean all
+
+# jinjanate — used by ovn-k contrib/kind.sh to render the KIND cluster config
+RUN pipx install 'jinjanator[yaml]' && \
+    pipx ensurepath
+
+# docker CLI — add Docker CE repo and install only the CLI package
+RUN dnf config-manager addrepo \
+        --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo && \
+    dnf install -y docker-ce-cli && \
+    dnf clean all
+
+# kind — download binary directly
+RUN ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && \
+    KIND_VERSION="$(curl -fsSL https://api.github.com/repos/kubernetes-sigs/kind/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4)" && \
+    curl -fsSLo /usr/local/bin/kind \
+        "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${ARCH}" && \
+    chmod +x /usr/local/bin/kind
+
+# kubectl — download binary directly
+RUN ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" && \
+    KUBECTL_VERSION="$(curl -fsSL https://dl.k8s.io/release/stable.txt)" && \
+    curl -fsSLo /usr/local/bin/kubectl \
+        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" && \
+    chmod +x /usr/local/bin/kubectl
+
+# Make pipx-installed binaries available on PATH for all subsequent RUN/CMD
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /workspace
