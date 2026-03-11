@@ -1,0 +1,312 @@
+/*
+SPDX-License-Identifier: Apache-2.0
+
+Copyright Contributors to the SkyNet project.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1
+
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:resource:scope=Namespaced
+
+// Skynet is the configuration for SkyNet multi-cluster networking on a local cluster.
+// User applies this CR to join the cluster to the clusterset.
+type Skynet struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              SkynetSpec   `json:"spec"`
+	Status            SkynetStatus `json:"status,omitempty"`
+}
+
+type SkynetSpec struct {
+	// ClusterID is the unique identifier for this cluster
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:MinLength=1
+	ClusterID string `json:"clusterID"`
+
+	// BrokerConfig contains the broker connection details
+	// +kubebuilder:validation:Required
+	BrokerConfig BrokerConfig `json:"brokerConfig"`
+
+	// RouteReflectorCount is the number of Route Reflector nodes
+	// 0 = full mesh mode, >0 = RR mode with auto-selection
+	// +optional
+	// +kubebuilder:default=0
+	RouteReflectorCount int `json:"routeReflectorCount,omitempty"`
+}
+
+type BrokerConfig struct {
+	// Server is the broker API server URL
+	// +kubebuilder:validation:Required
+	Server string `json:"server"`
+
+	// TokenSecretRef is the reference to the secret containing broker credentials
+	// +kubebuilder:validation:Required
+	TokenSecretRef SecretReference `json:"tokenSecretRef"`
+}
+
+type SecretReference struct {
+	// Name of the secret
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Namespace of the secret
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace"`
+}
+
+type SkynetStatus struct {
+	// Phase represents the current state of the SkyNet configuration
+	// +optional
+	Phase SkynetPhase `json:"phase,omitempty"`
+
+	// VtepCIDR is the allocated VTEP CIDR for this cluster
+	// +optional
+	VtepCIDR string `json:"vtepCIDR,omitempty"`
+
+	// ASN is the allocated BGP ASN for this cluster
+	// +optional
+	ASN uint32 `json:"asn,omitempty"`
+
+	// Conditions represent the latest available observations of the Skynet state
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type SkynetPhase string
+
+const (
+	SkynetPhasePending SkynetPhase = "Pending"
+	SkynetPhaseActive  SkynetPhase = "Active"
+	SkynetPhaseError   SkynetPhase = "Error"
+)
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type SkynetList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Skynet `json:"items"`
+}
+
+// +genclient
+// +genclient:nonNamespaced
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:resource:scope=Cluster
+
+// Cluster represents cluster registration and endpoints in the broker.
+// Created and managed by SkyNet agent.
+type Cluster struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ClusterSpec   `json:"spec"`
+	Status            ClusterStatus `json:"status,omitempty"`
+}
+
+type ClusterSpec struct {
+	// ClusterID is the unique identifier for this cluster
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:MinLength=1
+	ClusterID string `json:"clusterID"`
+
+	// VtepCIDR is the allocated VTEP CIDR for this cluster
+	// Allocated by SkyNet agent using optimistic locking
+	// +kubebuilder:validation:Required
+	VtepCIDR string `json:"vtepCIDR"`
+
+	// ASN is the allocated BGP ASN for this cluster
+	// Allocated by SkyNet agent using optimistic locking
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=64512
+	// +kubebuilder:validation:Maximum=65534
+	ASN uint32 `json:"asn"`
+}
+
+type ClusterStatus struct {
+	// Phase represents the current state of the cluster
+	// +optional
+	Phase ClusterPhase `json:"phase,omitempty"`
+
+	// Endpoints is the list of node endpoints in this cluster
+	// +optional
+	Endpoints []NodeEndpoint `json:"endpoints,omitempty"`
+
+	// LastHeartbeat is the timestamp of the last update from the cluster
+	// +optional
+	LastHeartbeat metav1.Time `json:"lastHeartbeat,omitempty"`
+}
+
+type ClusterPhase string
+
+const (
+	ClusterPhasePending  ClusterPhase = "Pending"
+	ClusterPhaseReady    ClusterPhase = "Ready"
+	ClusterPhaseDegraded ClusterPhase = "Degraded"
+)
+
+type NodeEndpoint struct {
+	// Node is the node name
+	// +kubebuilder:validation:Required
+	Node string `json:"node"`
+
+	// BgpPeerIP is the IP address used for BGP peering
+	// +kubebuilder:validation:Required
+	BgpPeerIP string `json:"bgpPeerIP"`
+
+	// VtepIP is the VTEP IP address for this node
+	// +kubebuilder:validation:Required
+	VtepIP string `json:"vtepIP"`
+
+	// RouteReflector indicates if this node is a Route Reflector
+	// +optional
+	RouteReflector bool `json:"routeReflector,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type ClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Cluster `json:"items"`
+}
+
+// +genclient
+// +genclient:nonNamespaced
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:resource:scope=Cluster
+
+// MultiClusterNetwork represents a multi-cluster network across clusters.
+// Created and managed on the broker.
+type MultiClusterNetwork struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              MultiClusterNetworkSpec `json:"spec"`
+}
+
+type MultiClusterNetworkSpec struct {
+	// VNI is the allocated VXLAN Network Identifier
+	// Allocated by first cluster using optimistic locking
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=5000
+	// +kubebuilder:validation:Maximum=16777215
+	VNI uint32 `json:"vni"`
+
+	// RouteTarget is the BGP EVPN route target in format "<ASN>:<VNI>"
+	// Uses fixed ASN 65000 for route targets
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^\d+:\d+$`
+	RouteTarget string `json:"routeTarget"`
+
+	// Topology is the network topology type
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=Layer2;Layer3
+	Topology NetworkTopology `json:"topology"`
+}
+
+type NetworkTopology string
+
+const (
+	NetworkTopologyLayer2 NetworkTopology = "Layer2"
+	NetworkTopologyLayer3 NetworkTopology = "Layer3"
+)
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type MultiClusterNetworkList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []MultiClusterNetwork `json:"items"`
+}
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:resource:scope=Namespaced
+
+// MultiClusterNetworkConnect is applied locally to connect a CUDN to a multi-cluster network.
+// SkyNet agent watches this CR and handles the connection.
+type MultiClusterNetworkConnect struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              MultiClusterNetworkConnectSpec   `json:"spec"`
+	Status            MultiClusterNetworkConnectStatus `json:"status,omitempty"`
+}
+
+type MultiClusterNetworkConnectSpec struct {
+	// LocalCUDN is the name of the local CUDN to connect
+	// +kubebuilder:validation:Required
+	LocalCUDN string `json:"localCUDN"`
+
+	// MultiClusterNetworkName is the name of the MultiClusterNetwork to join
+	// Mutually exclusive with CreateMultiClusterNetwork
+	// +optional
+	MultiClusterNetworkName string `json:"multiClusterNetworkName,omitempty"`
+
+	// CreateMultiClusterNetwork specifies parameters for creating a new multi-cluster network
+	// Mutually exclusive with MultiClusterNetworkName
+	// +optional
+	CreateMultiClusterNetwork *CreateMultiClusterNetworkParams `json:"createMultiClusterNetwork,omitempty"`
+}
+
+type CreateMultiClusterNetworkParams struct {
+	// Name is the name of the MultiClusterNetwork to create
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Topology is the network topology type
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=Layer2;Layer3
+	Topology NetworkTopology `json:"topology"`
+}
+
+type MultiClusterNetworkConnectStatus struct {
+	// Phase represents the current state of the connection
+	// +optional
+	Phase MultiClusterNetworkConnectPhase `json:"phase,omitempty"`
+
+	// VNI is the allocated VNI for this multi-cluster network
+	// +optional
+	VNI uint32 `json:"vni,omitempty"`
+
+	// RouteTarget is the route target for this multi-cluster network
+	// +optional
+	RouteTarget string `json:"routeTarget,omitempty"`
+
+	// Conditions represent the latest available observations
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type MultiClusterNetworkConnectPhase string
+
+const (
+	MultiClusterNetworkConnectPhasePending   MultiClusterNetworkConnectPhase = "Pending"
+	MultiClusterNetworkConnectPhaseConnected MultiClusterNetworkConnectPhase = "Connected"
+	MultiClusterNetworkConnectPhaseError     MultiClusterNetworkConnectPhase = "Error"
+)
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type MultiClusterNetworkConnectList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []MultiClusterNetworkConnect `json:"items"`
+}
