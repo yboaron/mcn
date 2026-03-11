@@ -204,3 +204,94 @@ lint:
 .PHONY: tidy
 tidy:
 	go mod tidy
+
+# ── SkyNet Test Environment ──────────────────────────────────────────────────
+# Simple local testing with KIND clusters (alternative to the full kind-* targets above)
+
+.PHONY: test-help
+test-help: ## Show test environment help
+	@echo 'SkyNet Test Environment Commands:'
+	@echo '  make test-setup         - Setup 2 KIND clusters with broker'
+	@echo '  make test-build-load    - Build and load agent image'
+	@echo '  make test-deploy        - Deploy agents to clusters'
+	@echo '  make test-verify        - Verify the setup'
+	@echo '  make test-mcn           - Create test MultiClusterNetwork'
+	@echo '  make test-mcnc          - Create test MultiClusterNetworkConnect'
+	@echo '  make test-all           - Run complete test setup'
+	@echo '  make test-clean         - Clean up test environment'
+	@echo ''
+	@echo 'Monitoring Commands:'
+	@echo '  make agent-logs-c1      - Show agent logs from cluster1'
+	@echo '  make agent-logs-c2      - Show agent logs from cluster2'
+	@echo '  make broker-clusters    - Show registered clusters'
+	@echo '  make broker-mcns        - Show MultiClusterNetworks'
+	@echo '  make vteps-c1           - Show VTEPs in cluster1'
+	@echo '  make vteps-c2           - Show VTEPs in cluster2'
+
+.PHONY: codegen
+codegen: ## Generate deepcopy and CRD manifests
+	./hack/update-codegen.sh
+
+.PHONY: test-setup
+test-setup: ## Setup KIND clusters with broker
+	cd test && ./setup-clusters.sh
+
+.PHONY: test-build-load
+test-build-load: ## Build and load agent image to KIND clusters
+	cd test && ./build-and-load.sh
+
+.PHONY: test-deploy
+test-deploy: ## Deploy agents to clusters
+	cd test && ./deploy-agents.sh
+
+.PHONY: test-verify
+test-verify: ## Verify the setup
+	cd test && ./verify-setup.sh
+
+.PHONY: test-mcn
+test-mcn: ## Create test MultiClusterNetwork
+	cd test && ./create-mcn.sh
+
+.PHONY: test-mcnc
+test-mcnc: ## Create test MultiClusterNetworkConnect
+	cd test && ./create-mcnc.sh test-mcn default
+
+.PHONY: test-all
+test-all: ## Run complete test setup
+	cd test && ./run-all.sh
+
+.PHONY: test-clean
+test-clean: ## Clean up test environment
+	cd test && ./cleanup.sh
+
+.PHONY: agent-logs-c1
+agent-logs-c1: ## Show agent logs from cluster1
+	kubectl --context kind-cluster1 -n skynet-system logs -l app=skynet-agent -f
+
+.PHONY: agent-logs-c2
+agent-logs-c2: ## Show agent logs from cluster2
+	kubectl --context kind-cluster2 -n skynet-system logs -l app=skynet-agent -f
+
+.PHONY: broker-clusters
+broker-clusters: ## Show registered clusters on broker
+	kubectl --context kind-cluster1 -n skynet-broker get clusters -o wide
+
+.PHONY: broker-mcns
+broker-mcns: ## Show MultiClusterNetworks on broker
+	kubectl --context kind-cluster1 -n skynet-broker get multiclusternetworks -o wide
+
+.PHONY: vteps-c1
+vteps-c1: ## Show VTEPs in cluster1
+	kubectl --context kind-cluster1 get vteps -o wide
+
+.PHONY: vteps-c2
+vteps-c2: ## Show VTEPs in cluster2
+	kubectl --context kind-cluster2 get vteps -o wide
+
+.PHONY: frr-c1
+frr-c1: ## Show FRRConfigurations in cluster1
+	kubectl --context kind-cluster1 get frrconfigurations -o wide
+
+.PHONY: frr-c2
+frr-c2: ## Show FRRConfigurations in cluster2
+	kubectl --context kind-cluster2 get frrconfigurations -o wide
