@@ -24,9 +24,11 @@ import (
 	"github.com/pkg/errors"
 	"github.com/submariner-io/admiral/pkg/syncer"
 	"github.com/submariner-io/admiral/pkg/syncer/broker"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
 	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
@@ -36,8 +38,12 @@ import (
 type BrokerSyncer struct {
 	clusterID     string
 	localClient   dynamic.Interface
+	localConfig   *rest.Config
+	restMapper    meta.RESTMapper
 	brokerClient  dynamic.Interface
+	brokerConfig  *rest.Config
 	brokerNS      string
+	scheme        *runtime.Scheme
 	clusterSyncer *broker.Syncer
 	mcnSyncer     *broker.Syncer
 }
@@ -46,8 +52,12 @@ type BrokerSyncer struct {
 type Config struct {
 	ClusterID    string
 	LocalClient  dynamic.Interface
+	LocalConfig  *rest.Config
+	RestMapper   meta.RESTMapper
 	BrokerClient dynamic.Interface
+	BrokerConfig *rest.Config
 	BrokerNS     string
+	Scheme       *runtime.Scheme
 }
 
 // NewBrokerSyncer creates a new BrokerSyncer instance
@@ -68,8 +78,12 @@ func NewBrokerSyncer(config *Config) (*BrokerSyncer, error) {
 	return &BrokerSyncer{
 		clusterID:    config.ClusterID,
 		localClient:  config.LocalClient,
+		localConfig:  config.LocalConfig,
+		restMapper:   config.RestMapper,
 		brokerClient: config.BrokerClient,
+		brokerConfig: config.BrokerConfig,
 		brokerNS:     config.BrokerNS,
+		scheme:       config.Scheme,
 	}, nil
 }
 
@@ -106,22 +120,25 @@ func (s *BrokerSyncer) initClusterSyncer() error {
 
 	// Create broker syncer for Cluster resources
 	// Direction: Local -> Broker (push only)
-	// The local cluster creates/updates its own Cluster CR on the broker
+	// Following Submariner Lighthouse pattern
 	syncer, err := broker.NewSyncer(broker.SyncerConfig{
-		LocalClient:     s.localClient,
-		LocalNamespace:  metav1.NamespaceAll,
-		LocalClusterID:  s.clusterID,
-		BrokerClient:    s.brokerClient,
-		BrokerNamespace: s.brokerNS,
+		LocalRestConfig:  s.localConfig,
+		LocalClient:      s.localClient,
+		LocalNamespace:   metav1.NamespaceAll,
+		LocalClusterID:   s.clusterID,
+		RestMapper:       s.restMapper,
+		BrokerRestConfig: s.brokerConfig,
+		BrokerClient:     s.brokerClient,
+		BrokerNamespace:  s.brokerNS,
 		ResourceConfigs: []broker.ResourceConfig{
 			{
-				LocalSourceNamespace:   metav1.NamespaceAll,
-				LocalResourceType:      &skynetv1.Cluster{},
-				BrokerResourceType:     &skynetv1.Cluster{},
-				TransformLocalToBroker: s.transformCluster,
+				LocalSourceNamespace: metav1.NamespaceAll,
+				LocalResourceType:    &skynetv1.Cluster{},
+				BrokerResourceType:   &skynetv1.Cluster{},
+				// Simple passthrough - no transformation needed for Cluster CRs
 			},
 		},
-		Scheme: runtime.NewScheme(),
+		Scheme: s.scheme,
 	})
 	if err != nil {
 		return errors.Wrap(err, "failed to create Cluster syncer")
@@ -137,13 +154,16 @@ func (s *BrokerSyncer) initMultiClusterNetworkSyncer() error {
 
 	// Create broker syncer for MultiClusterNetwork resources
 	// Direction: Broker -> Local (pull only)
-	// The local cluster watches MCN resources created on the broker
+	// Following Submariner Lighthouse pattern
 	syncer, err := broker.NewSyncer(broker.SyncerConfig{
-		LocalClient:     s.localClient,
-		LocalNamespace:  metav1.NamespaceAll,
-		LocalClusterID:  s.clusterID,
-		BrokerClient:    s.brokerClient,
-		BrokerNamespace: s.brokerNS,
+		LocalRestConfig:  s.localConfig,
+		LocalClient:      s.localClient,
+		LocalNamespace:   metav1.NamespaceAll,
+		LocalClusterID:   s.clusterID,
+		RestMapper:       s.restMapper,
+		BrokerRestConfig: s.brokerConfig,
+		BrokerClient:     s.brokerClient,
+		BrokerNamespace:  s.brokerNS,
 		ResourceConfigs: []broker.ResourceConfig{
 			{
 				LocalSourceNamespace: metav1.NamespaceAll,
@@ -152,7 +172,7 @@ func (s *BrokerSyncer) initMultiClusterNetworkSyncer() error {
 				// No transform needed, just sync as-is from broker to local
 			},
 		},
-		Scheme: runtime.NewScheme(),
+		Scheme: s.scheme,
 	})
 	if err != nil {
 		return errors.Wrap(err, "failed to create MultiClusterNetwork syncer")

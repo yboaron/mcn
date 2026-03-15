@@ -61,7 +61,7 @@ fi
 
 # Step 1: Setup clusters
 log_section "Step 1: Setup Clusters"
-"${SCRIPT_DIR}/setup-clusters.sh"
+"${SCRIPT_DIR}/setup-clusters-v2.sh"
 
 # Step 2: Build and load image
 log_section "Step 2: Build and Load Agent Image"
@@ -114,7 +114,7 @@ log_info "Clusters are ready!"
 log_info ""
 log_info "Useful commands:"
 log_info "  Watch agent logs:"
-log_info "    kubectl --context kind-cluster1 -n skynet-system logs -l app=skynet-agent -f"
+log_info "    kubectl --context kind-cluster1 -n skynet-operator logs -l app=skynet-agent -f"
 log_info ""
 log_info "  Check clusters on broker:"
 log_info "    kubectl --context kind-cluster1 -n skynet-broker get clusters -o wide"

@@ -55,7 +55,7 @@ func NewASNAllocator(brokerClient dynamic.Interface, brokerNS, clusterID string)
 
 // AllocateASN allocates an ASN for the cluster using optimistic locking
 // Returns the allocated ASN or error if allocation fails
-func (a *ASNAllocator) AllocateASN(ctx context.Context, cluster *skynetv1.Cluster) (uint32, error) {
+func (a *ASNAllocator) AllocateASN(ctx context.Context, cluster *skynetv1.Cluster) (int32, error) {
 	// Check if already allocated
 	if cluster.Spec.ASN != 0 {
 		klog.V(2).Infof("ASN already allocated for cluster %s: %d", a.clusterID, cluster.Spec.ASN)
@@ -79,13 +79,13 @@ func (a *ASNAllocator) AllocateASN(ctx context.Context, cluster *skynetv1.Cluste
 }
 
 // getAllocatedASNs retrieves all allocated ASNs from the broker
-func (a *ASNAllocator) getAllocatedASNs(ctx context.Context) (map[uint32]bool, error) {
+func (a *ASNAllocator) getAllocatedASNs(ctx context.Context) (map[int32]bool, error) {
 	clusterList, err := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to list Clusters from broker")
 	}
 
-	allocatedASNs := make(map[uint32]bool)
+	allocatedASNs := make(map[int32]bool)
 	for i := range clusterList.Items {
 		cluster := &skynetv1.Cluster{}
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterList.Items[i].Object, cluster); err != nil {
@@ -102,9 +102,9 @@ func (a *ASNAllocator) getAllocatedASNs(ctx context.Context) (map[uint32]bool, e
 }
 
 // findNextAvailableASN finds the next available ASN from the private ASN range
-func (a *ASNAllocator) findNextAvailableASN(allocatedASNs map[uint32]bool) (uint32, error) {
+func (a *ASNAllocator) findNextAvailableASN(allocatedASNs map[int32]bool) (int32, error) {
 	// Iterate through the private ASN range (64512-65534)
-	for asn := uint32(ASNMin); asn <= ASNMax; asn++ {
+	for asn := int32(ASNMin); asn <= ASNMax; asn++ {
 		if !allocatedASNs[asn] {
 			klog.V(4).Infof("Found available ASN: %d", asn)
 			return asn, nil
@@ -115,7 +115,7 @@ func (a *ASNAllocator) findNextAvailableASN(allocatedASNs map[uint32]bool) (uint
 }
 
 // ValidateASN validates an ASN is within the private range
-func ValidateASN(asn uint32) error {
+func ValidateASN(asn int32) error {
 	if asn < ASNMin || asn > ASNMax {
 		return errors.Errorf("ASN %d is not in private range [%d-%d]", asn, ASNMin, ASNMax)
 	}

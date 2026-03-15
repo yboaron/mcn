@@ -23,11 +23,13 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
@@ -48,12 +50,15 @@ const (
 
 // Agent represents the SkyNet agent running in a cluster
 type Agent struct {
-	clusterID      string
-	localClient    dynamic.Interface
-	localK8sClient kubernetes.Interface
-	brokerClient   dynamic.Interface
-	brokerNS       string
-	mgr            manager.Manager
+	clusterID       string
+	localClient     dynamic.Interface
+	localK8sClient  kubernetes.Interface
+	localConfig     *rest.Config
+	restMapper      meta.RESTMapper
+	brokerClient    dynamic.Interface
+	brokerConfig    *rest.Config
+	brokerNS        string
+	mgr             manager.Manager
 
 	// Components
 	brokerSyncer     *syncer.BrokerSyncer
@@ -72,7 +77,10 @@ type Config struct {
 	ClusterID      string
 	LocalClient    dynamic.Interface
 	LocalK8sClient kubernetes.Interface
+	LocalConfig    *rest.Config
+	RestMapper     meta.RESTMapper
 	BrokerClient   dynamic.Interface
+	BrokerConfig   *rest.Config
 	BrokerNS       string
 	Manager        manager.Manager
 }
@@ -96,7 +104,10 @@ func NewAgent(config *Config) (*Agent, error) {
 		clusterID:      config.ClusterID,
 		localClient:    config.LocalClient,
 		localK8sClient: config.LocalK8sClient,
+		localConfig:    config.LocalConfig,
+		restMapper:     config.RestMapper,
 		brokerClient:   config.BrokerClient,
+		brokerConfig:   config.BrokerConfig,
 		brokerNS:       config.BrokerNS,
 		mgr:            config.Manager,
 	}
@@ -113,12 +124,16 @@ func NewAgent(config *Config) (*Agent, error) {
 func (a *Agent) initComponents() error {
 	klog.Info("Initializing agent components")
 
-	// Initialize broker syncer
+	// Initialize broker syncer (following Submariner Lighthouse pattern)
 	brokerSyncerConfig := &syncer.Config{
 		ClusterID:    a.clusterID,
 		LocalClient:  a.localClient,
+		LocalConfig:  a.localConfig,
+		RestMapper:   a.restMapper,
 		BrokerClient: a.brokerClient,
+		BrokerConfig: a.brokerConfig,
 		BrokerNS:     a.brokerNS,
+		Scheme:       a.mgr.GetScheme(),
 	}
 	var err error
 	a.brokerSyncer, err = syncer.NewBrokerSyncer(brokerSyncerConfig)
@@ -142,11 +157,9 @@ func (a *Agent) initRuntimeComponents() error {
 
 	// Initialize VTEP manager
 	vtepMgrConfig := &vtep.Config{
-		LocalClient:  a.localClient,
-		BrokerClient: a.brokerClient,
-		BrokerNS:     a.brokerNS,
-		ClusterID:    a.clusterID,
-		VtepCIDR:     a.cluster.Spec.VtepCIDR,
+		LocalClient: a.localClient,
+		ClusterID:   a.clusterID,
+		VtepCIDR:    a.cluster.Spec.VtepCIDR,
 	}
 	var err error
 	a.vtepManager, err = vtep.NewVtepManager(vtepMgrConfig)
@@ -197,6 +210,12 @@ func (a *Agent) Start(ctx context.Context) error {
 		return errors.Wrap(err, "failed to initialize runtime components")
 	}
 
+	// Create local VTEP for this cluster
+	// This configures OVN-K to allocate VTEP IPs for local nodes
+	if err := a.vtepManager.EnsureLocalVTEP(ctx); err != nil {
+		return errors.Wrap(err, "failed to ensure local VTEP")
+	}
+
 	// Start broker syncer
 	if err := a.brokerSyncer.Start(ctx); err != nil {
 		return errors.Wrap(err, "failed to start broker syncer")
@@ -230,6 +249,10 @@ func (a *Agent) registerCluster(ctx context.Context) error {
 	} else {
 		// Cluster doesn't exist, create new one
 		cluster = &skynetv1.Cluster{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "skynet.io/v1",
+				Kind:       "Cluster",
+			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name: a.clusterID,
 			},
@@ -341,14 +364,10 @@ func (a *Agent) reconcile(ctx context.Context) error {
 	}
 
 	// Get remote clusters from broker
+	// Remote cluster endpoint info is used directly for BGP configuration
 	remoteClusters, err := a.brokerSyncer.GetRemoteClusters(ctx)
 	if err != nil {
 		return errors.Wrap(err, "failed to get remote clusters")
-	}
-
-	// Reconcile VTEP resources for remote clusters
-	if err := a.vtepManager.ReconcileVteps(ctx, remoteClusters); err != nil {
-		return errors.Wrap(err, "failed to reconcile VTEPs")
 	}
 
 	// Get MultiClusterNetworks from local cache
@@ -356,6 +375,8 @@ func (a *Agent) reconcile(ctx context.Context) error {
 	var multiClusterNetworks []*skynetv1.MultiClusterNetwork
 
 	// Reconcile BGP configuration
+	// BGP configurator reads remote cluster endpoints from remoteClusters
+	// No need for separate VTEP CRs - we get endpoint info from broker Cluster CRs
 	if err := a.bgpConfigurator.ReconcileBGPConfig(ctx, remoteClusters, multiClusterNetworks); err != nil {
 		return errors.Wrap(err, "failed to reconcile BGP config")
 	}

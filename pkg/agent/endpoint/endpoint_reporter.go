@@ -62,7 +62,7 @@ func NewEndpointReporter(config *Config) (*EndpointReporter, error) {
 }
 
 // CollectEndpoints collects node endpoint information from the cluster
-func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator func() (string, error)) ([]skynetv1.NodeEndpoint, error) {
+func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator func(string) (string, error)) ([]skynetv1.NodeEndpoint, error) {
 	klog.V(2).Info("Collecting node endpoints")
 
 	// List all nodes
@@ -90,7 +90,7 @@ func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator
 		}
 
 		// Allocate VTEP IP
-		vtepIP, err := vtepIPAllocator()
+		vtepIP, err := vtepIPAllocator(node.Name)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to allocate VTEP IP for node %s", node.Name)
 		}

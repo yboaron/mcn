@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := help
+
 REPO       ?= quay.io/aswinsuryan/skynet
 VERSION    ?= latest
 PLATFORMS  ?= linux/amd64,linux/arm64
@@ -27,16 +29,110 @@ DOCKER_RUN = docker run --rm \
 	-v /tmp:/tmp \
 	-e CLUSTERS="$(CLUSTERS)"
 
-# ── All-in-one ────────────────────────────────────────────────────────────────
-# Single command to do everything in the correct order:
-#   1. build images  2. create clusters  3. load images  4. deploy
-# Tear down with: make clean
-.PHONY: all
-all: docker-build kind-create kind-load-only kind-deploy-all
+# ── Help ──────────────────────────────────────────────────────────────────────
+
+.PHONY: help
+help: ## Show this help message
+	@echo 'SkyNet - Multi-Cluster Networking for OVN-Kubernetes'
+	@echo ''
+	@echo 'Usage: make <target>'
+	@echo ''
+	@echo 'Quick Start (Recommended):'
+	@echo '  make e2e           - Full setup: create clusters + build + deploy'
+	@echo '  make clusters      - Create 2 OVN-K KIND clusters with FRR-K8s'
+	@echo '  make build-agent   - Build and load SkyNet agent image'
+	@echo '  make deploy        - Deploy SkyNet agents'
+	@echo '  make verify-bgp    - Verify BGP peering status'
+	@echo '  make clean         - Clean up test environment'
+	@echo ''
+	@echo 'Monitoring:'
+	@echo '  make agent-logs    - Show agent logs from both clusters'
+	@echo '  make broker-info   - Show cluster registration on broker'
+	@echo ''
+	@echo 'Development:'
+	@echo '  make codegen       - Regenerate CRDs and deepcopy code'
+	@echo '  make test          - Run unit tests'
+	@echo '  make lint          - Run linters'
+	@echo ''
+	@echo 'All targets:'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+# ── Quick Start (Test Environment) ───────────────────────────────────────────
+# Simplified commands for SkyNet development and testing
+# These use the test/ scripts for quick local development
+
+.PHONY: clusters
+clusters: test-setup ## Create 2 OVN-K KIND clusters with FRR-K8s
+
+.PHONY: build-agent
+build-agent: test-build-load ## Build and load SkyNet agent image to clusters
+
+.PHONY: deploy
+deploy: test-deploy ## Deploy SkyNet agents to both clusters
+
+.PHONY: e2e
+e2e: ## Full end-to-end: create clusters, build, and deploy
+	@$(MAKE) clusters
+	@$(MAKE) build-agent
+	@$(MAKE) deploy
+	@echo ""
+	@echo "✓ End-to-end setup complete!"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  make verify-bgp    - Verify BGP peering"
+	@echo "  make agent-logs    - Show agent logs from both clusters"
+	@echo "  make broker-info   - Show cluster registration on broker"
+
+.PHONY: verify-bgp
+verify-bgp: ## Verify BGP peering status
+	cd test && ./verify-bgp.sh
+
+.PHONY: verify
+verify: test-verify ## Verify test setup (basic checks)
+
+.PHONY: agent-logs
+agent-logs: ## Show agent logs from both clusters
+	@echo "=== Cluster1 Agent Logs ==="
+	kubectl --context kind-cluster1 -n skynet-operator logs -l app=skynet-agent --tail=30 || true
+	@echo ""
+	@echo "=== Cluster2 Agent Logs ==="
+	kubectl --context kind-cluster2 -n skynet-operator logs -l app=skynet-agent --tail=30 || true
+
+.PHONY: broker-info
+broker-info: ## Show cluster registration and status on broker
+	@echo "=== Registered Clusters ==="
+	kubectl --context kind-cluster1 -n skynet-broker get clusters -o wide
+	@echo ""
+	@echo "=== Cluster1 Details ==="
+	kubectl --context kind-cluster1 -n skynet-broker get cluster cluster1 -o yaml || true
+	@echo ""
+	@echo "=== Cluster2 Details ==="
+	kubectl --context kind-cluster1 -n skynet-broker get cluster cluster2 -o yaml || true
+
+.PHONY: frr-status
+frr-status: ## Show FRRConfiguration status in both clusters
+	@echo "=== Cluster1 FRRConfigurations ==="
+	kubectl --context kind-cluster1 get frrconfigurations -A || true
+	@echo ""
+	@echo "=== Cluster2 FRRConfigurations ==="
+	kubectl --context kind-cluster2 get frrconfigurations -A || true
+
+.PHONY: vtep-status
+vtep-status: ## Show VTEP status in both clusters
+	@echo "=== Cluster1 VTEPs ==="
+	kubectl --context kind-cluster1 get vteps -o wide || true
+	@echo ""
+	@echo "=== Cluster2 VTEPs ==="
+	kubectl --context kind-cluster2 get vteps -o wide || true
 
 # Tear down everything
 .PHONY: clean
-clean: kind-clean
+clean: test-clean ## Clean up test environment
+
+# ── Legacy All-in-one (Operator-based) ────────────────────────────────────────
+# Original operator-based workflow (keeping for compatibility)
+.PHONY: all-operator
+all-operator: docker-build kind-create kind-load-only kind-deploy-all
 
 
 OPERATOR_IMAGE = $(REPO):mcn-operator-$(VERSION)
@@ -150,11 +246,11 @@ kind-clean: setup-image
 		$(SETUP_IMAGE) \
 		bash /workspace/scripts/kind/cleanup.sh
 
-# ── Deploy ────────────────────────────────────────────────────────────────────
-# Deploy to any cluster (real or KIND) by kubeconfig or context.
-# Usage: make deploy CONTEXT=kind-cluster1
-.PHONY: deploy
-deploy: setup-image
+# ── Deploy (Operator-based) ──────────────────────────────────────────────────
+# Deploy operator to any cluster (real or KIND) by kubeconfig or context.
+# Usage: make deploy-operator CONTEXT=kind-cluster1
+.PHONY: deploy-operator
+deploy-operator: setup-image
 	$(DOCKER_RUN) \
 		$(SETUP_IMAGE) \
 		kubectl apply -k /workspace/deploy/ --context $(CONTEXT)
@@ -189,27 +285,25 @@ deploy-bundle: setup-image
 		$(SETUP_IMAGE) \
 		bash -c 'kubectl kustomize /workspace/deploy/ > /workspace/deploy/install.yaml'
 
-# ── Test ──────────────────────────────────────────────────────────────────────
+# ── Test & Development ───────────────────────────────────────────────────────
 
 .PHONY: test
-test:
+test: ## Run unit tests
 	go test ./...
 
 .PHONY: lint
-lint:
+lint: ## Run linters
 	golangci-lint run ./...
 
-# ── Tidy ─────────────────────────────────────────────────────────────────────
-
 .PHONY: tidy
-tidy:
+tidy: ## Run go mod tidy
 	go mod tidy
 
-# ── SkyNet Test Environment ──────────────────────────────────────────────────
-# Simple local testing with KIND clusters (alternative to the full kind-* targets above)
+# ── Legacy Test Environment ──────────────────────────────────────────────────
+# Original test-* targets (use new quick start targets above instead)
 
 .PHONY: test-help
-test-help: ## Show test environment help
+test-help: ## Show legacy test environment help (deprecated)
 	@echo 'SkyNet Test Environment Commands:'
 	@echo '  make test-setup         - Setup 2 KIND clusters with broker'
 	@echo '  make test-build-load    - Build and load agent image'
@@ -266,11 +360,11 @@ test-clean: ## Clean up test environment
 
 .PHONY: agent-logs-c1
 agent-logs-c1: ## Show agent logs from cluster1
-	kubectl --context kind-cluster1 -n skynet-system logs -l app=skynet-agent -f
+	kubectl --context kind-cluster1 -n skynet-operator logs -l app=skynet-agent -f
 
 .PHONY: agent-logs-c2
 agent-logs-c2: ## Show agent logs from cluster2
-	kubectl --context kind-cluster2 -n skynet-system logs -l app=skynet-agent -f
+	kubectl --context kind-cluster2 -n skynet-operator logs -l app=skynet-agent -f
 
 .PHONY: broker-clusters
 broker-clusters: ## Show registered clusters on broker

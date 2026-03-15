@@ -45,11 +45,11 @@ check_cluster() {
 
     # Check agent pod
     log_info "SkyNet agent status:"
-    kubectl -n skynet-system get pods -l app=skynet-agent
+    kubectl -n skynet-operator get pods -l app=skynet-agent
 
     # Check agent logs (last 20 lines)
     log_info "Recent agent logs:"
-    kubectl -n skynet-system logs -l app=skynet-agent --tail=20 || log_warn "No logs available yet"
+    kubectl -n skynet-operator logs -l app=skynet-agent --tail=20 || log_warn "No logs available yet"
 
     echo ""
 }
@@ -141,7 +141,7 @@ main() {
     log_section "Verification Complete"
     log_info ""
     log_info "Useful commands:"
-    log_info "  Watch agent logs: kubectl --context kind-cluster1 -n skynet-system logs -l app=skynet-agent -f"
+    log_info "  Watch agent logs: kubectl --context kind-cluster1 -n skynet-operator logs -l app=skynet-agent -f"
     log_info "  Check clusters: kubectl --context kind-cluster1 -n ${BROKER_NAMESPACE} get clusters"
     log_info "  Check MCNs: kubectl --context kind-cluster1 -n ${BROKER_NAMESPACE} get multiclusternetworks"
     log_info "  Check VTEPs: kubectl --context kind-cluster1 get vteps"

@@ -84,7 +84,7 @@ type SkynetStatus struct {
 
 	// ASN is the allocated BGP ASN for this cluster
 	// +optional
-	ASN uint32 `json:"asn,omitempty"`
+	ASN int32 `json:"asn,omitempty"`
 
 	// Conditions represent the latest available observations of the Skynet state
 	// +optional
@@ -108,9 +108,8 @@ type SkynetList struct {
 }
 
 // +genclient
-// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:resource:scope=Namespaced
 
 // Cluster represents cluster registration and endpoints in the broker.
 // Created and managed by SkyNet agent.
@@ -138,7 +137,7 @@ type ClusterSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=64512
 	// +kubebuilder:validation:Maximum=65534
-	ASN uint32 `json:"asn"`
+	ASN int32 `json:"asn"`
 }
 
 type ClusterStatus struct {
@@ -190,9 +189,9 @@ type ClusterList struct {
 }
 
 // +genclient
-// +genclient:nonNamespaced
+// +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:resource:scope=Namespaced
 
 // MultiClusterNetwork represents a multi-cluster network across clusters.
 // Created and managed on the broker.

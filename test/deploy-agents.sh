@@ -46,7 +46,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: skynet-agent
-  namespace: skynet-system
+  namespace: skynet-operator
   labels:
     app: skynet-agent
 spec:
@@ -107,11 +107,11 @@ main() {
     log_info "=== Deployment complete ==="
     log_info ""
     log_info "Check agent status:"
-    log_info "  kubectl --context kind-${CLUSTER1_NAME} -n skynet-system get pods"
-    log_info "  kubectl --context kind-${CLUSTER2_NAME} -n skynet-system get pods"
+    log_info "  kubectl --context kind-${CLUSTER1_NAME} -n skynet-operator get pods"
+    log_info "  kubectl --context kind-${CLUSTER2_NAME} -n skynet-operator get pods"
     log_info ""
     log_info "Check agent logs:"
-    log_info "  kubectl --context kind-${CLUSTER1_NAME} -n skynet-system logs -l app=skynet-agent -f"
+    log_info "  kubectl --context kind-${CLUSTER1_NAME} -n skynet-operator logs -l app=skynet-agent -f"
 }
 
 main "$@"

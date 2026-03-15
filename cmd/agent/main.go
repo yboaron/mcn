@@ -25,15 +25,16 @@ import (
 	"os/signal"
 	"syscall"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/submariner-io/admiral/pkg/util"
 	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
 	"github.com/aswinsuryana/skynet/pkg/agent"
 	"github.com/aswinsuryana/skynet/pkg/agent/controller"
@@ -74,6 +75,12 @@ func main() {
 	// Get local cluster config
 	localConfig := config.GetConfigOrDie()
 
+	// Build REST mapper for type discovery (required by Admiral broker syncer)
+	restMapper, err := util.BuildRestMapper(localConfig)
+	if err != nil {
+		klog.Fatalf("Failed to build REST mapper: %v", err)
+	}
+
 	// Create local clients
 	localDynamicClient, err := dynamic.NewForConfig(localConfig)
 	if err != nil {
@@ -97,14 +104,15 @@ func main() {
 		klog.Fatalf("Failed to create broker client: %v", err)
 	}
 
-	// Setup controller manager
-	scheme := runtime.NewScheme()
-	if err := skynetv1.AddToScheme(scheme); err != nil {
-		klog.Fatalf("Failed to add skynet scheme: %v", err)
+	// Use global Kubernetes scheme and add our CRD types (Submariner pattern)
+	// The global scheme already has core types registered
+	if err := skynetv1.AddToScheme(clientgoscheme.Scheme); err != nil {
+		klog.Fatalf("Failed to add SkyNet types to scheme: %v", err)
 	}
 
+	// Setup controller manager with the global scheme
 	mgr, err := ctrl.NewManager(localConfig, ctrl.Options{
-		Scheme: scheme,
+		Scheme: clientgoscheme.Scheme,
 	})
 	if err != nil {
 		klog.Fatalf("Failed to create manager: %v", err)
@@ -127,7 +135,10 @@ func main() {
 		ClusterID:      clusterID,
 		LocalClient:    localDynamicClient,
 		LocalK8sClient: localK8sClient,
+		LocalConfig:    localConfig,
+		RestMapper:     restMapper,
 		BrokerClient:   brokerClient,
+		BrokerConfig:   brokerConfig,
 		BrokerNS:       brokerNamespace,
 		Manager:        mgr,
 	}

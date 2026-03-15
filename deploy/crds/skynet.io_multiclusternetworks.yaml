@@ -12,7 +12,7 @@ spec:
     listKind: MultiClusterNetworkList
     plural: multiclusternetworks
     singular: multiclusternetwork
-  scope: Cluster
+  scope: Namespaced
   versions:
   - name: v1
     schema:

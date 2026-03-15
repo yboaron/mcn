@@ -1,0 +1,45 @@
+# Manual broker deployment for testing
+# Apply to cluster1 which acts as the broker
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: skynet-broker
+  labels:
+    app: skynet
+
+---
+# Broker ServiceAccount (for future broker components if needed)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: skynet-broker
+  namespace: skynet-broker
+
+---
+# Agent access from other clusters needs ClusterRole for broker resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: skynet-broker-access
+rules:
+- apiGroups: ["skynet.io"]
+  resources: ["clusters", "multiclusternetworks"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# ClusterRoleBinding for agents to access broker
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: skynet-broker-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: skynet-broker-access
+subjects:
+- kind: ServiceAccount
+  name: skynet-agent
+  namespace: skynet-operator
+# Note: This is for local cluster agent. Remote clusters use tokens.

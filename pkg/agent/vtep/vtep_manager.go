@@ -20,18 +20,15 @@ package vtep
 
 import (
 	"context"
-	"fmt"
 	"net"
 
 	"github.com/pkg/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
-
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
 )
 
 var (
@@ -43,23 +40,27 @@ var (
 	}
 )
 
-// VtepManager manages VTEP resources for remote clusters
+const (
+	// LocalVTEPName is the name of the local VTEP resource
+	LocalVTEPName = "skynet-local"
+	// VTEPModeManaged means OVN-K manages VTEP IP allocation
+	VTEPModeManaged = "Managed"
+)
+
+// VtepManager manages VTEP resources for the local cluster
+// It creates a single VTEP CR that tells OVN-K to allocate VTEP IPs for local nodes
 type VtepManager struct {
-	localClient  dynamic.Interface
-	brokerClient dynamic.Interface
-	brokerNS     string
-	clusterID    string
-	vtepCIDR     string
-	vtepIPIndex  int
+	localClient dynamic.Interface
+	clusterID   string
+	vtepCIDR    string
+	vtepIPIndex int
 }
 
 // Config holds configuration for VtepManager
 type Config struct {
-	LocalClient  dynamic.Interface
-	BrokerClient dynamic.Interface
-	BrokerNS     string
-	ClusterID    string
-	VtepCIDR     string
+	LocalClient dynamic.Interface
+	ClusterID   string
+	VtepCIDR    string
 }
 
 // NewVtepManager creates a new VtepManager
@@ -75,151 +76,99 @@ func NewVtepManager(config *Config) (*VtepManager, error) {
 	}
 
 	return &VtepManager{
-		localClient:  config.LocalClient,
-		brokerClient: config.BrokerClient,
-		brokerNS:     config.BrokerNS,
-		clusterID:    config.ClusterID,
-		vtepCIDR:     config.VtepCIDR,
-		vtepIPIndex:  1, // Start from .0.1
+		localClient: config.LocalClient,
+		clusterID:   config.ClusterID,
+		vtepCIDR:    config.VtepCIDR,
+		vtepIPIndex: 1, // Start from .0.1
 	}, nil
 }
 
-// ReconcileVteps creates/updates VTEP resources for remote clusters
-func (m *VtepManager) ReconcileVteps(ctx context.Context, remoteClusters []*skynetv1.Cluster) error {
-	klog.V(2).Infof("Reconciling VTEPs for %d remote clusters", len(remoteClusters))
+// EnsureLocalVTEP creates or updates the local VTEP resource
+// This configures OVN-K to allocate VTEP IPs for nodes in this cluster
+func (m *VtepManager) EnsureLocalVTEP(ctx context.Context) error {
+	klog.Infof("Ensuring local VTEP with CIDR %s", m.vtepCIDR)
 
-	for _, remoteCluster := range remoteClusters {
-		if err := m.reconcileVtepForCluster(ctx, remoteCluster); err != nil {
-			klog.Errorf("Failed to reconcile VTEP for cluster %s: %v", remoteCluster.Spec.ClusterID, err)
-			continue
-		}
-	}
-
-	return nil
-}
-
-// reconcileVtepForCluster creates/updates a VTEP resource for a remote cluster
-func (m *VtepManager) reconcileVtepForCluster(ctx context.Context, remoteCluster *skynetv1.Cluster) error {
-	vtepName := fmt.Sprintf("skynet-%s", remoteCluster.Spec.ClusterID)
-
-	// Build VTEP spec
-	vtepSpec := map[string]interface{}{
-		"name": vtepName,
-		"endpoints": m.buildVtepEndpoints(remoteCluster),
-	}
-
+	// Build VTEP according to OVN-K spec
+	// See: go-controller/pkg/crd/vtep/v1/types.go
 	vtep := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "k8s.ovn.org/v1",
-			"kind":       "Vtep",
+			"kind":       "VTEP",
 			"metadata": map[string]interface{}{
-				"name": vtepName,
+				"name": LocalVTEPName,
 				"labels": map[string]interface{}{
-					"skynet.io/cluster":       remoteCluster.Spec.ClusterID,
-					"skynet.io/managed-by":    "skynet-agent",
-					"skynet.io/local-cluster": m.clusterID,
+					"skynet.io/managed-by": "skynet-agent",
+					"skynet.io/cluster":    m.clusterID,
 				},
 			},
-			"spec": vtepSpec,
+			"spec": map[string]interface{}{
+				// CIDRs is the list of IP ranges from which VTEP IPs are allocated
+				// This tells OVN-K to allocate VTEP IPs from this CIDR
+				"cidrs": []string{m.vtepCIDR},
+				// Mode: "Managed" means OVN-K allocates and assigns VTEP IPs per node automatically
+				"mode": VTEPModeManaged,
+			},
 		},
 	}
 
 	// Check if VTEP already exists
-	existingVtep, err := m.localClient.Resource(VtepGVR).Get(ctx, vtepName, metav1.GetOptions{})
+	existingVtep, err := m.localClient.Resource(VtepGVR).Get(ctx, LocalVTEPName, metav1.GetOptions{})
 	if err == nil {
 		// Update existing VTEP
 		vtep.SetResourceVersion(existingVtep.GetResourceVersion())
 		_, err = m.localClient.Resource(VtepGVR).Update(ctx, vtep, metav1.UpdateOptions{})
 		if err != nil {
-			return errors.Wrapf(err, "failed to update VTEP %s", vtepName)
+			return errors.Wrap(err, "failed to update local VTEP")
 		}
-		klog.V(4).Infof("Updated VTEP %s for remote cluster %s", vtepName, remoteCluster.Spec.ClusterID)
-	} else {
+		klog.V(2).Infof("Updated local VTEP with CIDR %s", m.vtepCIDR)
+	} else if apierrors.IsNotFound(err) {
 		// Create new VTEP
 		_, err = m.localClient.Resource(VtepGVR).Create(ctx, vtep, metav1.CreateOptions{})
 		if err != nil {
-			return errors.Wrapf(err, "failed to create VTEP %s", vtepName)
+			return errors.Wrap(err, "failed to create local VTEP")
 		}
-		klog.Infof("Created VTEP %s for remote cluster %s", vtepName, remoteCluster.Spec.ClusterID)
+		klog.Infof("Created local VTEP with CIDR %s (mode: %s)", m.vtepCIDR, VTEPModeManaged)
+	} else {
+		return errors.Wrap(err, "failed to get local VTEP")
 	}
 
 	return nil
 }
 
-// buildVtepEndpoints builds the endpoints list for a VTEP from cluster endpoint info
-func (m *VtepManager) buildVtepEndpoints(remoteCluster *skynetv1.Cluster) []map[string]interface{} {
-	endpoints := []map[string]interface{}{}
-
-	for _, ep := range remoteCluster.Status.Endpoints {
-		endpoint := map[string]interface{}{
-			"ip":   ep.BgpPeerIP,
-			"vtep": ep.VtepIP,
-		}
-		endpoints = append(endpoints, endpoint)
-	}
-
-	return endpoints
-}
-
-// AllocateVtepIP allocates the next available VTEP IP from the cluster's VTEP CIDR
-func (m *VtepManager) AllocateVtepIP() (string, error) {
-	ip, ipNet, err := net.ParseCIDR(m.vtepCIDR)
+// AllocateVtepIP allocates a VTEP IP for a node from the cluster's VTEP CIDR
+// This is used by the endpoint reporter when collecting node information
+// Note: This is a temporary allocation for reporting to the broker.
+// OVN-K will manage the actual VTEP IP allocation via the VTEP CR.
+func (m *VtepManager) AllocateVtepIP(nodeName string) (string, error) {
+	_, network, err := net.ParseCIDR(m.vtepCIDR)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to parse VTEP CIDR")
+		return "", errors.Wrapf(err, "failed to parse VTEP CIDR %s", m.vtepCIDR)
 	}
 
-	// Convert IP to 4-byte representation
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return "", errors.New("VTEP CIDR must be IPv4")
-	}
+	// Calculate IP from base network and index
+	// For 100.0.0.0/16, we allocate 100.0.0.1, 100.0.0.2, etc.
+	baseIP := network.IP
+	ip := make(net.IP, len(baseIP))
+	copy(ip, baseIP)
 
-	// Calculate the next IP based on vtepIPIndex
-	// For a /16 like 100.0.0.0/16, we want to allocate 100.0.0.1, 100.0.0.2, etc.
-	nextIP := make(net.IP, len(ip4))
-	copy(nextIP, ip4)
+	// For /16 networks, increment the last octet
+	// This works for up to 254 nodes per cluster
+	ip[len(ip)-1] = byte(m.vtepIPIndex)
 
-	// Add the index to the IP
-	// For /16, we modify the last two octets
-	index := m.vtepIPIndex
-	nextIP[3] = byte(index & 0xFF)
-	nextIP[2] = byte((index >> 8) & 0xFF)
-
-	// Check if IP is within the CIDR range
-	if !ipNet.Contains(nextIP) {
-		return "", errors.New("VTEP IP pool exhausted")
-	}
-
+	vtepIP := ip.String()
 	m.vtepIPIndex++
-	return nextIP.String(), nil
+
+	klog.V(4).Infof("Allocated VTEP IP %s for node %s", vtepIP, nodeName)
+	return vtepIP, nil
 }
 
-// DeleteVtep deletes a VTEP resource for a removed cluster
-func (m *VtepManager) DeleteVtep(ctx context.Context, clusterID string) error {
-	vtepName := fmt.Sprintf("skynet-%s", clusterID)
-
-	err := m.localClient.Resource(VtepGVR).Delete(ctx, vtepName, metav1.DeleteOptions{})
-	if err != nil {
-		return errors.Wrapf(err, "failed to delete VTEP %s", vtepName)
+// DeleteLocalVTEP deletes the local VTEP resource
+func (m *VtepManager) DeleteLocalVTEP(ctx context.Context) error {
+	err := m.localClient.Resource(VtepGVR).Delete(ctx, LocalVTEPName, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return errors.Wrap(err, "failed to delete local VTEP")
 	}
 
-	klog.Infof("Deleted VTEP %s for cluster %s", vtepName, clusterID)
+	klog.Info("Deleted local VTEP")
 	return nil
-}
-
-// ListVteps lists all VTEP resources managed by SkyNet
-func (m *VtepManager) ListVteps(ctx context.Context) ([]runtime.Object, error) {
-	vtepList, err := m.localClient.Resource(VtepGVR).List(ctx, metav1.ListOptions{
-		LabelSelector: "skynet.io/managed-by=skynet-agent",
-	})
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to list VTEPs")
-	}
-
-	var vteps []runtime.Object
-	for i := range vtepList.Items {
-		vteps = append(vteps, &vtepList.Items[i])
-	}
-
-	return vteps, nil
 }

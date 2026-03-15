@@ -1,24 +1,14 @@
 #!/bin/bash
 
-# DEPRECATED: This script uses a local OVN-K repo path and is not suitable for CI/CD.
-# Please use setup-clusters-v2.sh instead, which clones OVN-K from GitHub.
-#
-# This script is kept for backward compatibility only.
-
-echo ""
-echo "⚠️  WARNING: This script is DEPRECATED"
-echo "⚠️  Please use ./setup-clusters-v2.sh instead"
-echo "⚠️  The v2 script clones OVN-K from GitHub and works with CI/CD"
-echo ""
-echo "Press Ctrl+C within 5 seconds to cancel, or wait to continue with deprecated script..."
-sleep 5
+# SkyNet Test Environment Setup
+# Clones OVN-K from GitHub (like Shipyard does) instead of using local repo
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-echo "=== Setting up SkyNet test environment (DEPRECATED) ==="
+echo "=== Setting up SkyNet test environment (Shipyard-style) ==="
 
 # Colors for output
 RED='\033[0;31m'
@@ -32,9 +22,11 @@ CLUSTER2_NAME="${CLUSTER2_NAME:-cluster2}"
 BROKER_CLUSTER="${CLUSTER1_NAME}"
 BROKER_NAMESPACE="skynet-broker"
 NUM_WORKERS="${NUM_WORKERS:-2}"
-OVNK_REPO_PATH="${OVNK_REPO_PATH:-/home/yboaron/prj/ovn-kubernetes}"
-# OVN_IMAGE - Optional: specify source image (default: ghcr.io/ovn-org/ovn-kubernetes/ovn-kube-ubuntu:master)
-# Will be pulled, tagged, and pushed to local registry at localhost:5000/ovn-kube:latest
+
+# OVN-K Configuration (like Shipyard)
+OVNK_REPO="${OVNK_REPO:-https://github.com/ovn-org/ovn-kubernetes.git}"
+OVNK_BRANCH="${OVNK_BRANCH:-master}"  # or specific tag like "v0.4.0"
+OVNK_CLONE_DIR="/tmp/ovn-kubernetes-skynet-$$"
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -47,6 +39,17 @@ log_warn() {
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+# Cleanup function
+cleanup_ovnk_clone() {
+    if [ -d "$OVNK_CLONE_DIR" ]; then
+        log_info "Cleaning up OVN-K clone..."
+        rm -rf "$OVNK_CLONE_DIR"
+    fi
+}
+
+# Register cleanup on exit
+trap cleanup_ovnk_clone EXIT
 
 # Check prerequisites
 check_prerequisites() {
@@ -72,51 +75,43 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Check for OVN-K repo
-    if [ ! -d "$OVNK_REPO_PATH" ]; then
-        log_error "OVN-Kubernetes repo not found at: $OVNK_REPO_PATH"
-        log_error "Please set OVNK_REPO_PATH environment variable or clone the repo:"
-        log_error "  git clone https://github.com/ovn-org/ovn-kubernetes $OVNK_REPO_PATH"
-        exit 1
-    fi
-
-    if [ ! -f "$OVNK_REPO_PATH/contrib/kind.sh" ]; then
-        log_error "kind.sh not found in OVN-K repo at: $OVNK_REPO_PATH/contrib/kind.sh"
-        exit 1
-    fi
-
     log_info "All prerequisites met"
-    log_info "Using OVN-K repo: $OVNK_REPO_PATH"
+}
+
+# Clone OVN-K from GitHub (Shipyard approach)
+clone_ovnk() {
+    log_info "Cloning OVN-Kubernetes from GitHub..."
+    log_info "  Repo: $OVNK_REPO"
+    log_info "  Branch: $OVNK_BRANCH"
+    log_info "  Clone dir: $OVNK_CLONE_DIR"
+
+    git clone --depth 1 --branch "$OVNK_BRANCH" "$OVNK_REPO" "$OVNK_CLONE_DIR"
+
+    if [ ! -f "$OVNK_CLONE_DIR/contrib/kind.sh" ]; then
+        log_error "kind.sh not found in cloned OVN-K repo"
+        exit 1
+    fi
+
+    log_info "✓ OVN-Kubernetes cloned successfully"
 }
 
 # Patch kind-common.sh to use ubuntu-image instead of fedora-image (avoids koji package issues)
 patch_kind_for_ubuntu() {
-    local KIND_COMMON="$OVNK_REPO_PATH/contrib/kind-common.sh"
+    local KIND_COMMON="$OVNK_CLONE_DIR/contrib/kind-common.sh"
 
     if grep -q "fedora-image" "$KIND_COMMON"; then
-        log_info "Patching kind-common.sh to use ubuntu-image instead of fedora-image..."
+        log_info "Patching kind-common.sh to use ubuntu-image..."
         sed -i.bak 's/fedora-image/ubuntu-image/g' "$KIND_COMMON"
         log_info "✓ Patched to use ubuntu-image"
     fi
 }
 
-# Restore kind-common.sh after cluster creation
-restore_kind_common() {
-    local KIND_COMMON="$OVNK_REPO_PATH/contrib/kind-common.sh"
-
-    if [ -f "${KIND_COMMON}.bak" ]; then
-        log_info "Restoring original kind-common.sh..."
-        mv "${KIND_COMMON}.bak" "$KIND_COMMON"
-    fi
-}
-
-# Create KIND clusters using OVN-K kind.sh (build from source for version compatibility)
+# Create KIND clusters using OVN-K kind.sh
 create_clusters() {
     log_info "Creating KIND clusters with OVN-Kubernetes..."
-    log_info "Building OVN-K from source in ${OVNK_REPO_PATH} for version compatibility"
-    log_info "Using Ubuntu-based image to avoid koji package issues"
+    log_info "Building OVN-K from source for latest VTEP CRD support"
 
-    local KIND_SH="$OVNK_REPO_PATH/contrib/kind.sh"
+    local KIND_SH="$OVNK_CLONE_DIR/contrib/kind.sh"
 
     # Patch to use ubuntu-image
     patch_kind_for_ubuntu
@@ -127,7 +122,7 @@ create_clusters() {
     else
         log_info "Creating cluster ${CLUSTER1_NAME} with $NUM_WORKERS workers (this may take 5-10 minutes)..."
 
-        pushd "$OVNK_REPO_PATH" > /dev/null
+        pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER1_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
           "$KIND_SH" -wk "$NUM_WORKERS" -ic
@@ -135,7 +130,7 @@ create_clusters() {
 
         # Export kubeconfig
         kind export kubeconfig --name "$CLUSTER1_NAME" --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml"
-        log_info "✓ Cluster ${CLUSTER1_NAME} created with OVN-Kubernetes"
+        log_info "✓ Cluster ${CLUSTER1_NAME} created"
     fi
 
     # Create cluster2
@@ -144,7 +139,7 @@ create_clusters() {
     else
         log_info "Creating cluster ${CLUSTER2_NAME} with $NUM_WORKERS workers (this may take 5-10 minutes)..."
 
-        pushd "$OVNK_REPO_PATH" > /dev/null
+        pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER2_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
           "$KIND_SH" -wk "$NUM_WORKERS" -ic
@@ -152,20 +147,46 @@ create_clusters() {
 
         # Export kubeconfig
         kind export kubeconfig --name "$CLUSTER2_NAME" --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml"
-        log_info "✓ Cluster ${CLUSTER2_NAME} created with OVN-Kubernetes"
+        log_info "✓ Cluster ${CLUSTER2_NAME} created"
     fi
 
-    # Restore original kind-common.sh
-    restore_kind_common
-
     log_info "KIND clusters with OVN-Kubernetes created successfully"
+}
+
+# Verify VTEP CRD is installed
+verify_vtep_crd() {
+    log_info "Verifying VTEP CRD is installed..."
+
+    local cluster_ctx="kind-${CLUSTER1_NAME}"
+    local max_retries=12
+    local retry_interval=5
+
+    for i in $(seq 1 $max_retries); do
+        if kubectl --context "$cluster_ctx" get crd vteps.k8s.ovn.org &> /dev/null; then
+            log_info "✓ VTEP CRD (vteps.k8s.ovn.org) is installed"
+
+            # Show VTEP CRD version
+            local crd_version=$(kubectl --context "$cluster_ctx" get crd vteps.k8s.ovn.org -o jsonpath='{.spec.versions[0].name}')
+            log_info "  VTEP CRD version: $crd_version"
+            return 0
+        fi
+
+        if [ $i -lt $max_retries ]; then
+            log_warn "VTEP CRD not found yet, retrying in ${retry_interval}s (attempt $i/$max_retries)..."
+            sleep $retry_interval
+        fi
+    done
+
+    log_error "VTEP CRD not found after $max_retries attempts!"
+    log_error "OVN-K version may not support VTEP."
+    log_error "Try using a newer OVN-K branch or master."
+    return 1
 }
 
 # Install FRR-K8s for BGP support
 install_frr_k8s_all() {
     log_info "Installing FRR-K8s on both clusters..."
 
-    # Based on: https://github.com/yboaron/ovn-bgp-mcn-udn-poc/blob/main/scripts/0a-install-frr-k8s.sh
     FRR_K8S_VERSION="${FRR_K8S_VERSION:-v0.0.21}"
 
     # Create temp directory
@@ -188,21 +209,21 @@ install_frr_k8s_all() {
 
     # Install on cluster1
     log_info "Installing FRR-K8s on ${CLUSTER1_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    kubectl --context "kind-${CLUSTER1_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
 
     log_info "Waiting for FRR-K8s to be ready on ${CLUSTER1_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=2m || true
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=2m || true
+    kubectl --context "kind-${CLUSTER1_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
+    kubectl --context "kind-${CLUSTER1_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
 
     log_info "✓ FRR-K8s installed on ${CLUSTER1_NAME}"
 
     # Install on cluster2
     log_info "Installing FRR-K8s on ${CLUSTER2_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    kubectl --context "kind-${CLUSTER2_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
 
     log_info "Waiting for FRR-K8s to be ready on ${CLUSTER2_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=2m || true
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=2m || true
+    kubectl --context "kind-${CLUSTER2_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
+    kubectl --context "kind-${CLUSTER2_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
 
     log_info "✓ FRR-K8s installed on ${CLUSTER2_NAME}"
 }
@@ -357,7 +378,8 @@ save_kubeconfigs() {
 # Main setup flow
 main() {
     log_info "Configuration:"
-    log_info "  OVN-K Repo: $OVNK_REPO_PATH"
+    log_info "  OVN-K Repo: $OVNK_REPO"
+    log_info "  OVN-K Branch: $OVNK_BRANCH"
     log_info "  Cluster 1: $CLUSTER1_NAME"
     log_info "  Cluster 2: $CLUSTER2_NAME"
     log_info "  Workers per cluster: $NUM_WORKERS"
@@ -365,7 +387,9 @@ main() {
     log_info ""
 
     check_prerequisites
+    clone_ovnk
     create_clusters
+    verify_vtep_crd
 
     # Install FRR-K8s on both clusters
     log_info ""
@@ -390,30 +414,34 @@ main() {
     log_info "=== Setup complete ==="
     log_info ""
     log_info "Clusters created with:"
-    log_info "  ✓ OVN-Kubernetes CNI (with interconnect)"
+    log_info "  ✓ OVN-Kubernetes CNI (built from ${OVNK_BRANCH})"
+    log_info "  ✓ VTEP CRD support verified"
     log_info "  ✓ FRR-K8s for BGP support"
     log_info "  ✓ SkyNet CRDs on broker"
-    log_info "  ✓ RBAC configured"
+    log_info "  ✓ RBAC configured for agents"
+    log_info "  ✓ Broker tokens created"
+    log_info ""
+    log_info "OVN-K clone will be cleaned up automatically"
+    log_info ""
+    log_info "Files created in ${SCRIPT_DIR}:"
+    log_info "  - kubeconfig-${CLUSTER1_NAME}.yaml"
+    log_info "  - kubeconfig-${CLUSTER2_NAME}.yaml"
+    log_info "  - broker-token-${CLUSTER1_NAME}.txt"
+    log_info "  - broker-token-${CLUSTER2_NAME}.txt"
+    log_info "  - broker-server.txt"
     log_info ""
     log_info "Next steps:"
     log_info "  1. Build and load agent image:"
-    log_info "     cd test && ./build-and-load.sh"
+    log_info "     ./build-and-load.sh"
     log_info "  2. Deploy agents:"
-    log_info "     cd test && ./deploy-agents.sh"
-    log_info "  3. Verify setup:"
-    log_info "     cd test && ./verify-setup.sh"
-    log_info ""
-    log_info "Or run complete setup:"
-    log_info "  cd test && ./run-all.sh"
+    log_info "     ./deploy-agents.sh"
+    log_info "  3. Verify BGP setup:"
+    log_info "     ./verify-bgp.sh"
     log_info ""
     log_info "Cluster contexts:"
     log_info "  Cluster 1: kind-${CLUSTER1_NAME}"
     log_info "  Cluster 2: kind-${CLUSTER2_NAME}"
-    log_info "  Broker: kind-${BROKER_CLUSTER}"
-    log_info ""
-    log_info "Kubeconfigs saved:"
-    log_info "  ${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml"
-    log_info "  ${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml"
+    log_info "  Broker: ${BROKER_CLUSTER} (namespace: ${BROKER_NAMESPACE})"
 }
 
 main "$@"

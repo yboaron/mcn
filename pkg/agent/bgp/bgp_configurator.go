@@ -47,7 +47,7 @@ type BGPConfigurator struct {
 	brokerClient dynamic.Interface
 	brokerNS     string
 	clusterID    string
-	localASN     uint32
+	localASN     int32
 	topology     BGPTopology
 }
 
@@ -67,7 +67,7 @@ type Config struct {
 	BrokerClient dynamic.Interface
 	BrokerNS     string
 	ClusterID    string
-	LocalASN     uint32
+	LocalASN     int32
 	Topology     BGPTopology
 }
 
@@ -131,29 +131,13 @@ func (c *BGPConfigurator) buildFRRConfiguration(name string, remoteClusters []*s
 
 	// Build BGP router config
 	router := map[string]interface{}{
-		"asn": c.localASN,
+		"asn":       c.localASN,
 		"neighbors": c.buildNeighbors(remoteClusters),
-	}
-
-	// Build route target configurations for EVPN
-	var vrfs []map[string]interface{}
-	for _, mcn := range multiClusterNetworks {
-		vrf := map[string]interface{}{
-			"name": fmt.Sprintf("vrf-%s", mcn.Name),
-			"vni":  mcn.Spec.VNI,
-			"importTargets": []string{mcn.Spec.RouteTarget},
-			"exportTargets": []string{mcn.Spec.RouteTarget},
-		}
-		vrfs = append(vrfs, vrf)
 	}
 
 	spec := map[string]interface{}{
 		"bgp": map[string]interface{}{
 			"routers": []map[string]interface{}{router},
-			"vrfs":    vrfs,
-		},
-		"nodeSelector": map[string]interface{}{
-			"skynet.io/bgp-enabled": "true",
 		},
 	}
 
@@ -186,15 +170,9 @@ func (c *BGPConfigurator) buildNeighbors(remoteClusters []*skynetv1.Cluster) []m
 			}
 
 			neighbor := map[string]interface{}{
-				"address":    endpoint.BgpPeerIP,
-				"asn":        remoteCluster.Spec.ASN,
-				"ebgpMultiHop": 255,
-				"addressFamilies": []map[string]interface{}{
-					{
-						"afi":  "l2vpn",
-						"safi": "evpn",
-					},
-				},
+				"address":      endpoint.BgpPeerIP,
+				"asn":          remoteCluster.Spec.ASN,
+				"ebgpMultiHop": true,
 			}
 
 			neighbors = append(neighbors, neighbor)
