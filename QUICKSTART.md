@@ -9,12 +9,12 @@ This guide shows how to quickly set up and test SkyNet multi-cluster networking 
 - `kubectl` installed
 - Go 1.21+ (for building from source)
 
-## One-Command Setup
+## One-Command Deployment
 
 Create two OVN-Kubernetes clusters with FRR-K8s and deploy SkyNet agents:
 
 ```bash
-make e2e
+make deploy
 ```
 
 This command will:
@@ -25,6 +25,16 @@ This command will:
 5. Set up broker on cluster1
 
 **Duration:** ~10-15 minutes (first run with image builds)
+
+## Run End-to-End Tests
+
+After deployment, verify everything is working:
+
+```bash
+make e2e
+```
+
+This runs the full e2e test suite including cluster registration and BGP verification.
 
 ## Step-by-Step (Alternative)
 
@@ -38,7 +48,10 @@ make clusters
 make build-agent
 
 # Step 3: Deploy agents
-make deploy
+make deploy-agents
+
+# Step 4: Run e2e tests
+make e2e
 ```
 
 ## Verify the Setup

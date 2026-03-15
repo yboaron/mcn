@@ -38,16 +38,21 @@ help: ## Show this help message
 	@echo 'Usage: make <target>'
 	@echo ''
 	@echo 'Quick Start (Recommended):'
-	@echo '  make e2e           - Full setup: create clusters + build + deploy'
-	@echo '  make clusters      - Create 2 OVN-K KIND clusters with FRR-K8s'
-	@echo '  make build-agent   - Build and load SkyNet agent image'
-	@echo '  make deploy        - Deploy SkyNet agents'
+	@echo '  make deploy        - Full deployment: create clusters + build + deploy'
+	@echo '  make e2e           - Run end-to-end tests'
 	@echo '  make verify-bgp    - Verify BGP peering status'
 	@echo '  make clean         - Clean up test environment'
+	@echo ''
+	@echo 'Step-by-step:'
+	@echo '  make clusters      - Create 2 OVN-K KIND clusters with FRR-K8s'
+	@echo '  make build-agent   - Build and load SkyNet agent image'
+	@echo '  make deploy-agents - Deploy SkyNet agents only'
 	@echo ''
 	@echo 'Monitoring:'
 	@echo '  make agent-logs    - Show agent logs from both clusters'
 	@echo '  make broker-info   - Show cluster registration on broker'
+	@echo '  make frr-status    - Show FRR configurations'
+	@echo '  make vtep-status   - Show VTEP resources'
 	@echo ''
 	@echo 'Development:'
 	@echo '  make codegen       - Regenerate CRDs and deepcopy code'
@@ -67,21 +72,36 @@ clusters: test-setup ## Create 2 OVN-K KIND clusters with FRR-K8s
 .PHONY: build-agent
 build-agent: test-build-load ## Build and load SkyNet agent image to clusters
 
-.PHONY: deploy
-deploy: test-deploy ## Deploy SkyNet agents to both clusters
+.PHONY: deploy-agents
+deploy-agents: test-deploy ## Deploy SkyNet agents to both clusters (agents only)
 
-.PHONY: e2e
-e2e: ## Full end-to-end: create clusters, build, and deploy
+.PHONY: deploy
+deploy: ## Full deployment: create clusters, build, and deploy agents
 	@$(MAKE) clusters
 	@$(MAKE) build-agent
-	@$(MAKE) deploy
+	@$(MAKE) deploy-agents
 	@echo ""
-	@echo "✓ End-to-end setup complete!"
+	@echo "✓ Full deployment complete!"
 	@echo ""
 	@echo "Next steps:"
 	@echo "  make verify-bgp    - Verify BGP peering"
 	@echo "  make agent-logs    - Show agent logs from both clusters"
 	@echo "  make broker-info   - Show cluster registration on broker"
+	@echo ""
+	@echo "To run end-to-end tests:"
+	@echo "  make e2e           - Run e2e test suite"
+
+.PHONY: e2e
+e2e: ## Run end-to-end tests (requires deployed clusters)
+	@echo "Running SkyNet e2e tests..."
+	@echo ""
+	@echo "Test 1: Verify cluster registration"
+	@$(MAKE) verify
+	@echo ""
+	@echo "Test 2: Verify BGP configuration"
+	@$(MAKE) verify-bgp
+	@echo ""
+	@echo "✓ E2E tests complete!"
 
 .PHONY: verify-bgp
 verify-bgp: ## Verify BGP peering status
