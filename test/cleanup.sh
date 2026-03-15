@@ -3,6 +3,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Colors
 GREEN='\033[0;32m'
@@ -42,7 +43,7 @@ fi
 log_info "Cleaning up generated files..."
 rm -f "${SCRIPT_DIR}/broker-token-"*.txt
 rm -f "${SCRIPT_DIR}/broker-server.txt"
-rm -f "${SCRIPT_DIR}/kubeconfig-"*.yaml
+rm -rf "${PROJECT_ROOT}/output"
 
 # Remove docker image
 log_info "Removing docker image..."

@@ -32,3 +32,6 @@ go.work.sum
 # Temporary files
 *.tmp
 *.log
+
+# Output directory (kubeconfigs, test artifacts)
+output/

@@ -17,12 +17,18 @@ Create two OVN-Kubernetes clusters with FRR-K8s and deploy SkyNet agents:
 make deploy
 ```
 
+**⚠️ WARNING:** This command **destroys any existing clusters** and creates a fresh environment!
+- Shows a 5-second warning before proceeding (Ctrl+C to cancel)
+- Automatically runs `make clean` first
+- Then creates clusters, builds, and deploys
+
 This command will:
-1. Create 2 KIND clusters with OVN-Kubernetes CNI (non-overlapping CIDRs)
-2. Install FRR-K8s on both clusters for BGP support
-3. Build the SkyNet agent image
-4. Deploy SkyNet agents to both clusters
-5. Set up broker on cluster1
+1. Delete any existing KIND clusters (if present)
+2. Create 2 fresh KIND clusters with OVN-Kubernetes CNI (non-overlapping CIDRs)
+3. Install FRR-K8s on both clusters for BGP support
+4. Build the SkyNet agent image
+5. Deploy SkyNet agents to both clusters
+6. Set up broker on cluster1
 
 **Duration:** ~10-15 minutes (first run with image builds)
 
@@ -38,9 +44,12 @@ This runs the full e2e test suite including cluster registration and BGP verific
 
 ## Step-by-Step (Alternative)
 
-If you prefer to run steps individually:
+If you prefer to run steps individually (without auto-clean):
 
 ```bash
+# Optional: Clean existing clusters first
+make clean
+
 # Step 1: Create clusters with OVN-K and FRR-K8s
 make clusters
 
@@ -53,6 +62,8 @@ make deploy-agents
 # Step 4: Run e2e tests
 make e2e
 ```
+
+**Note:** Unlike `make deploy`, individual steps do NOT auto-clean. Use `make clean` first if you want a fresh start.
 
 ## Verify the Setup
 

@@ -17,6 +17,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+KUBECONFIG_DIR="${PROJECT_ROOT}/output/kubeconfigs"
 
 echo "=== Setting up SkyNet test environment (DEPRECATED) ==="
 
@@ -134,7 +135,7 @@ create_clusters() {
         popd > /dev/null
 
         # Export kubeconfig
-        kind export kubeconfig --name "$CLUSTER1_NAME" --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml"
+        kind export kubeconfig --name "$CLUSTER1_NAME" --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME}"
         log_info "✓ Cluster ${CLUSTER1_NAME} created with OVN-Kubernetes"
     fi
 
@@ -151,7 +152,7 @@ create_clusters() {
         popd > /dev/null
 
         # Export kubeconfig
-        kind export kubeconfig --name "$CLUSTER2_NAME" --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml"
+        kind export kubeconfig --name "$CLUSTER2_NAME" --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME}"
         log_info "✓ Cluster ${CLUSTER2_NAME} created with OVN-Kubernetes"
     fi
 
@@ -188,21 +189,21 @@ install_frr_k8s_all() {
 
     # Install on cluster1
     log_info "Installing FRR-K8s on ${CLUSTER1_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    kubectl --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
 
     log_info "Waiting for FRR-K8s to be ready on ${CLUSTER1_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=2m || true
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=2m || true
+    kubectl --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=2m || true
+    kubectl --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=2m || true
 
     log_info "✓ FRR-K8s installed on ${CLUSTER1_NAME}"
 
     # Install on cluster2
     log_info "Installing FRR-K8s on ${CLUSTER2_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    kubectl --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
 
     log_info "Waiting for FRR-K8s to be ready on ${CLUSTER2_NAME}..."
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=2m || true
-    kubectl --kubeconfig "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=2m || true
+    kubectl --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=2m || true
+    kubectl --kubeconfig "${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=2m || true
 
     log_info "✓ FRR-K8s installed on ${CLUSTER2_NAME}"
 }
@@ -345,13 +346,16 @@ EOF
 save_kubeconfigs() {
     log_info "Saving kubeconfigs..."
 
+    # Create output directory (Submariner-style)
+    mkdir -p "${KUBECONFIG_DIR}"
+
     # Export cluster1 kubeconfig
-    kind get kubeconfig --name "${CLUSTER1_NAME}" > "${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml"
+    kind get kubeconfig --name "${CLUSTER1_NAME}" > "${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME}"
 
     # Export cluster2 kubeconfig
-    kind get kubeconfig --name "${CLUSTER2_NAME}" > "${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml"
+    kind get kubeconfig --name "${CLUSTER2_NAME}" > "${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME}"
 
-    log_info "Kubeconfigs saved to ${SCRIPT_DIR}"
+    log_info "Kubeconfigs saved to ${KUBECONFIG_DIR}"
 }
 
 # Main setup flow
@@ -412,8 +416,8 @@ main() {
     log_info "  Broker: kind-${BROKER_CLUSTER}"
     log_info ""
     log_info "Kubeconfigs saved:"
-    log_info "  ${SCRIPT_DIR}/kubeconfig-${CLUSTER1_NAME}.yaml"
-    log_info "  ${SCRIPT_DIR}/kubeconfig-${CLUSTER2_NAME}.yaml"
+    log_info "  ${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME}"
+    log_info "  ${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME}"
 }
 
 main "$@"

@@ -38,7 +38,7 @@ help: ## Show this help message
 	@echo 'Usage: make <target>'
 	@echo ''
 	@echo 'Quick Start (Recommended):'
-	@echo '  make deploy        - Full deployment: create clusters + build + deploy'
+	@echo '  make deploy        - ⚠️  FRESH deployment (destroys existing clusters)'
 	@echo '  make e2e           - Run end-to-end tests'
 	@echo '  make verify-bgp    - Verify BGP peering status'
 	@echo '  make clean         - Clean up test environment'
@@ -76,7 +76,11 @@ build-agent: test-build-load ## Build and load SkyNet agent image to clusters
 deploy-agents: test-deploy ## Deploy SkyNet agents to both clusters (agents only)
 
 .PHONY: deploy
-deploy: ## Full deployment: create clusters, build, and deploy agents
+deploy: ## Full deployment: DESTROYS existing clusters and creates fresh environment
+	@echo "⚠️  WARNING: This will delete any existing clusters and create fresh ones!"
+	@echo "Press Ctrl+C to cancel, or wait 5 seconds to continue..."
+	@sleep 5
+	@$(MAKE) clean
 	@$(MAKE) clusters
 	@$(MAKE) build-agent
 	@$(MAKE) deploy-agents
