@@ -212,18 +212,18 @@ install_frr_k8s_all() {
 setup_broker() {
     log_info "Setting up broker on ${BROKER_CLUSTER}..."
 
-    kubectl config use-context "kind-${BROKER_CLUSTER}"
+    local BROKER_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-${BROKER_CLUSTER}"
 
     # Create broker namespace
-    kubectl create namespace "${BROKER_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl --kubeconfig "${BROKER_KUBECONFIG}" create namespace "${BROKER_NAMESPACE}" --dry-run=client -o yaml | kubectl --kubeconfig "${BROKER_KUBECONFIG}" apply -f -
 
     # Apply SkyNet CRDs
     log_info "Applying SkyNet CRDs to broker..."
-    kubectl apply -f "${PROJECT_ROOT}/deploy/crds/"
+    kubectl --kubeconfig "${BROKER_KUBECONFIG}" apply -f "${PROJECT_ROOT}/deploy/crds/"
 
     # Wait for CRDs to be established
     log_info "Waiting for CRDs to be established..."
-    kubectl wait --for condition=established --timeout=60s \
+    kubectl --kubeconfig "${BROKER_KUBECONFIG}" wait --for condition=established --timeout=60s \
         crd/clusters.skynet.io \
         crd/multiclusternetworks.skynet.io \
         crd/multiclusternetworkconnects.skynet.io \
@@ -237,9 +237,9 @@ create_agent_rbac() {
     local cluster_name=$1
     log_info "Creating agent RBAC for ${cluster_name}..."
 
-    kubectl config use-context "kind-${cluster_name}"
+    local CLUSTER_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-${cluster_name}"
 
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl --kubeconfig "${CLUSTER_KUBECONFIG}" apply -f -
 ---
 apiVersion: v1
 kind: Namespace
@@ -292,11 +292,10 @@ create_broker_access() {
     local cluster_name=$1
     log_info "Creating broker access for ${cluster_name}..."
 
-    # Switch to broker cluster
-    kubectl config use-context "kind-${BROKER_CLUSTER}"
+    local BROKER_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-${BROKER_CLUSTER}"
 
     # Create service account for the agent on broker
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl --kubeconfig "${BROKER_KUBECONFIG}" apply -f -
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -331,12 +330,12 @@ EOF
 
     # Create token for the service account
     log_info "Creating token for ${cluster_name} agent..."
-    kubectl create token "skynet-agent-${cluster_name}" \
+    kubectl --kubeconfig "${BROKER_KUBECONFIG}" create token "skynet-agent-${cluster_name}" \
         -n "${BROKER_NAMESPACE}" \
         --duration=87600h > "${SCRIPT_DIR}/broker-token-${cluster_name}.txt"
 
     # Get broker API server
-    BROKER_SERVER=$(kubectl config view -o jsonpath="{.clusters[?(@.name=='kind-${BROKER_CLUSTER}')].cluster.server}")
+    BROKER_SERVER=$(kubectl --kubeconfig "${BROKER_KUBECONFIG}" config view -o jsonpath="{.clusters[0].cluster.server}")
     echo "${BROKER_SERVER}" > "${SCRIPT_DIR}/broker-server.txt"
 
     log_info "Broker access created for ${cluster_name}"
