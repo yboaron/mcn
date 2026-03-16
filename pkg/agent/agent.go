@@ -20,6 +20,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -359,8 +360,10 @@ func (a *Agent) reconcile(ctx context.Context) error {
 	}
 
 	// Update Cluster CR status with endpoints
+	// Don't fail reconciliation if update fails due to concurrent modification
+	// The next reconciliation will retry
 	if err := a.updateClusterStatus(ctx, endpoints); err != nil {
-		return errors.Wrap(err, "failed to update cluster status")
+		klog.Warningf("Failed to update cluster status (will retry): %v", err)
 	}
 
 	// Get remote clusters from broker
@@ -386,35 +389,53 @@ func (a *Agent) reconcile(ctx context.Context) error {
 }
 
 // updateClusterStatus updates the Cluster CR status with node endpoints
+// Uses retry logic to handle concurrent updates from heartbeat
 func (a *Agent) updateClusterStatus(ctx context.Context, endpoints []skynetv1.NodeEndpoint) error {
-	// Get latest cluster from broker
-	clusterUnstructured, err := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
-	if err != nil {
-		return errors.Wrap(err, "failed to get Cluster from broker")
+	maxRetries := 3
+	backoff := time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		// Get latest cluster from broker
+		clusterUnstructured, err := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+		if err != nil {
+			return errors.Wrap(err, "failed to get Cluster from broker")
+		}
+
+		cluster := &skynetv1.Cluster{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterUnstructured.Object, cluster); err != nil {
+			return errors.Wrap(err, "failed to convert Cluster")
+		}
+
+		// Update endpoints
+		cluster.Status.Endpoints = endpoints
+
+		// Convert back and update
+		unstructuredCluster, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cluster)
+		if err != nil {
+			return errors.Wrap(err, "failed to convert Cluster to unstructured")
+		}
+
+		clusterUnstructured.Object = unstructuredCluster
+		_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
+		if err == nil {
+			klog.V(4).Infof("Updated Cluster status with %d endpoints", len(endpoints))
+			return nil
+		}
+
+		// Check if it's a conflict error
+		if !strings.Contains(err.Error(), "object has been modified") {
+			return errors.Wrap(err, "failed to update Cluster status")
+		}
+
+		// Retry with backoff
+		if i < maxRetries-1 {
+			klog.V(4).Infof("Cluster status update conflict, retrying in %v (attempt %d/%d)", backoff, i+1, maxRetries)
+			time.Sleep(backoff)
+			backoff *= 2 // Exponential backoff
+		}
 	}
 
-	cluster := &skynetv1.Cluster{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterUnstructured.Object, cluster); err != nil {
-		return errors.Wrap(err, "failed to convert Cluster")
-	}
-
-	// Update endpoints
-	cluster.Status.Endpoints = endpoints
-
-	// Convert back and update
-	unstructuredCluster, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cluster)
-	if err != nil {
-		return errors.Wrap(err, "failed to convert Cluster to unstructured")
-	}
-
-	clusterUnstructured.Object = unstructuredCluster
-	_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
-	if err != nil {
-		return errors.Wrap(err, "failed to update Cluster status")
-	}
-
-	klog.V(4).Infof("Updated Cluster status with %d endpoints", len(endpoints))
-	return nil
+	return errors.New("failed to update Cluster status after retries")
 }
 
 // heartbeatLoop periodically updates the cluster heartbeat

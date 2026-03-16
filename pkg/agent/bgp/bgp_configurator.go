@@ -103,19 +103,21 @@ func (c *BGPConfigurator) ReconcileBGPConfig(ctx context.Context, remoteClusters
 	// Build FRRConfiguration
 	frrConfig := c.buildFRRConfiguration(configName, remoteClusters, multiClusterNetworks)
 
+	frrNamespace := "frr-k8s-system"
+
 	// Check if FRRConfiguration already exists
-	existingConfig, err := c.localClient.Resource(FRRConfigurationGVR).Namespace(metav1.NamespaceDefault).Get(ctx, configName, metav1.GetOptions{})
+	existingConfig, err := c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Get(ctx, configName, metav1.GetOptions{})
 	if err == nil {
 		// Update existing configuration
 		frrConfig.SetResourceVersion(existingConfig.GetResourceVersion())
-		_, err = c.localClient.Resource(FRRConfigurationGVR).Namespace(metav1.NamespaceDefault).Update(ctx, frrConfig, metav1.UpdateOptions{})
+		_, err = c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Update(ctx, frrConfig, metav1.UpdateOptions{})
 		if err != nil {
 			return errors.Wrap(err, "failed to update FRRConfiguration")
 		}
 		klog.V(4).Info("Updated FRRConfiguration")
 	} else {
 		// Create new configuration
-		_, err = c.localClient.Resource(FRRConfigurationGVR).Namespace(metav1.NamespaceDefault).Create(ctx, frrConfig, metav1.CreateOptions{})
+		_, err = c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Create(ctx, frrConfig, metav1.CreateOptions{})
 		if err != nil {
 			return errors.Wrap(err, "failed to create FRRConfiguration")
 		}
@@ -135,11 +137,15 @@ func (c *BGPConfigurator) buildFRRConfiguration(name string, remoteClusters []*s
 		"neighbors": c.buildNeighbors(remoteClusters),
 	}
 
+	// Build spec - no nodeSelector means apply to all nodes (FRR-K8s behavior)
 	spec := map[string]interface{}{
 		"bgp": map[string]interface{}{
 			"routers": []map[string]interface{}{router},
 		},
 	}
+
+	// TODO: Add L2VPN EVPN address family when FRR-K8s supports it
+	// See: https://github.com/metallb/frr-k8s/pull/372
 
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -147,7 +153,7 @@ func (c *BGPConfigurator) buildFRRConfiguration(name string, remoteClusters []*s
 			"kind":       "FRRConfiguration",
 			"metadata": map[string]interface{}{
 				"name":      name,
-				"namespace": metav1.NamespaceDefault,
+				"namespace": "frr-k8s-system",  // FRR-K8s watches this namespace
 				"labels": map[string]interface{}{
 					"skynet.io/managed-by":    "skynet-agent",
 					"skynet.io/local-cluster": c.clusterID,
@@ -181,6 +187,34 @@ func (c *BGPConfigurator) buildNeighbors(remoteClusters []*skynetv1.Cluster) []m
 
 	return neighbors
 }
+
+// buildEVPNConfig builds raw FRR configuration for L2VPN EVPN address family
+// This enables VTEP IP advertisement (underlay) between clusters
+// TODO: Re-enable when FRR-K8s EVPN support is merged (https://github.com/metallb/frr-k8s/pull/372)
+/*
+func (c *BGPConfigurator) buildEVPNConfig(remoteClusters []*skynetv1.Cluster) string {
+	var config string
+
+	config = fmt.Sprintf("router bgp %d\n", c.localASN)
+	config += "  address-family l2vpn evpn\n"
+
+	// Activate EVPN for all remote cluster neighbors
+	for _, remoteCluster := range remoteClusters {
+		for _, endpoint := range remoteCluster.Status.Endpoints {
+			// Skip non-route-reflector nodes if using RR topology and this is not an RR
+			if c.topology == TopologyRouteReflector && !endpoint.RouteReflector {
+				continue
+			}
+
+			config += fmt.Sprintf("    neighbor %s activate\n", endpoint.BgpPeerIP)
+		}
+	}
+
+	config += "  exit-address-family\n"
+
+	return config
+}
+*/
 
 // ReconcileNodeBGPConfig creates/updates per-node FRRConfiguration for local BGP settings
 func (c *BGPConfigurator) ReconcileNodeBGPConfig(ctx context.Context, nodeName, bgpPeerIP string) error {
@@ -248,8 +282,9 @@ func (c *BGPConfigurator) buildNodeFRRConfiguration(name, nodeName, bgpPeerIP st
 // DeleteBGPConfig deletes the FRRConfiguration
 func (c *BGPConfigurator) DeleteBGPConfig(ctx context.Context) error {
 	configName := "skynet-bgp-config"
+	frrNamespace := "frr-k8s-system"
 
-	err := c.localClient.Resource(FRRConfigurationGVR).Namespace(metav1.NamespaceDefault).Delete(ctx, configName, metav1.DeleteOptions{})
+	err := c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Delete(ctx, configName, metav1.DeleteOptions{})
 	if err != nil {
 		return errors.Wrap(err, "failed to delete FRRConfiguration")
 	}
