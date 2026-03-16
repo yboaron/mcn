@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+KUBECONFIG_DIR="${PROJECT_ROOT}/output/kubeconfigs"
 
 # Colors for output
 RED='\033[0;31m'
@@ -30,7 +31,7 @@ deploy_agent() {
     local cluster_name=$1
     log_info "Deploying SkyNet agent to ${cluster_name}..."
 
-    kubectl config use-context "kind-${cluster_name}"
+    local CLUSTER_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-${cluster_name}"
 
     # Read broker configuration
     BROKER_SERVER=$(cat "${SCRIPT_DIR}/broker-server.txt")
@@ -38,10 +39,10 @@ deploy_agent() {
 
     # Apply CRDs to local cluster
     log_info "Applying CRDs to ${cluster_name}..."
-    kubectl apply -f "${PROJECT_ROOT}/deploy/crds/"
+    kubectl --kubeconfig "${CLUSTER_KUBECONFIG}" apply -f "${PROJECT_ROOT}/deploy/crds/"
 
     # Create agent deployment
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl --kubeconfig "${CLUSTER_KUBECONFIG}" apply -f -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -107,11 +108,11 @@ main() {
     log_info "=== Deployment complete ==="
     log_info ""
     log_info "Check agent status:"
-    log_info "  kubectl --context kind-${CLUSTER1_NAME} -n skynet-operator get pods"
-    log_info "  kubectl --context kind-${CLUSTER2_NAME} -n skynet-operator get pods"
+    log_info "  kubectl --kubeconfig ${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME} -n skynet-operator get pods"
+    log_info "  kubectl --kubeconfig ${KUBECONFIG_DIR}/kind-config-${CLUSTER2_NAME} -n skynet-operator get pods"
     log_info ""
     log_info "Check agent logs:"
-    log_info "  kubectl --context kind-${CLUSTER1_NAME} -n skynet-operator logs -l app=skynet-agent -f"
+    log_info "  kubectl --kubeconfig ${KUBECONFIG_DIR}/kind-config-${CLUSTER1_NAME} -n skynet-operator logs -l app=skynet-agent -f"
 }
 
 main "$@"

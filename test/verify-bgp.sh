@@ -3,9 +3,11 @@
 # Verification script for BGP peering setup
 # This focuses on BGP full mesh connectivity without CUDN stretching
 
-set -e
+# Note: Don't use set -e as we want to continue on failures and report at the end
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+KUBECONFIG_DIR="${PROJECT_ROOT}/output/kubeconfigs"
 
 # Colors
 RED='\033[0;31m'
@@ -14,8 +16,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-CLUSTER1="kind-cluster1"
-CLUSTER2="kind-cluster2"
+CLUSTER1_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-cluster1"
+CLUSTER2_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-cluster2"
 BROKER_NS="skynet-broker"
 AGENT_NS="skynet-operator"
 
@@ -57,15 +59,15 @@ check() {
 log_section "Phase 1: Agent Status"
 
 # Check if agent pods are running
-check "kubectl --context ${CLUSTER1} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].status.phase}' | grep -q Running" \
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].status.phase}' | grep -q Running" \
     "Cluster1 agent is Running"
 
-check "kubectl --context ${CLUSTER2} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].status.phase}' | grep -q Running" \
+check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].status.phase}' | grep -q Running" \
     "Cluster2 agent is Running"
 
 # Get agent pod names for later use
-AGENT1_POD=$(kubectl --context ${CLUSTER1} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-AGENT2_POD=$(kubectl --context ${CLUSTER2} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+AGENT1_POD=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+AGENT2_POD=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n ${AGENT_NS} get pod -l app=skynet-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
 if [[ -n "$AGENT1_POD" ]]; then
     log_info "Cluster1 agent pod: $AGENT1_POD"
@@ -81,15 +83,15 @@ fi
 log_section "Phase 2: Cluster Registration on Broker"
 
 # Check if clusters are registered
-check "kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster1" \
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster1" \
     "Cluster1 registered on broker"
 
-check "kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster2" \
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster2" \
     "Cluster2 registered on broker"
 
 # Check ASN allocation
-CLUSTER1_ASN=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.spec.asn}' 2>/dev/null)
-CLUSTER2_ASN=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.spec.asn}' 2>/dev/null)
+CLUSTER1_ASN=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.spec.asn}' 2>/dev/null)
+CLUSTER2_ASN=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.spec.asn}' 2>/dev/null)
 
 if [[ -n "$CLUSTER1_ASN" ]] && [[ -n "$CLUSTER2_ASN" ]] && [[ "$CLUSTER1_ASN" != "$CLUSTER2_ASN" ]]; then
     log_info "ASN allocation: cluster1=$CLUSTER1_ASN, cluster2=$CLUSTER2_ASN (unique ✓)"
@@ -100,8 +102,8 @@ else
 fi
 
 # Check VTEP CIDR allocation
-CLUSTER1_VTEP=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.spec.vtepCIDR}' 2>/dev/null)
-CLUSTER2_VTEP=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.spec.vtepCIDR}' 2>/dev/null)
+CLUSTER1_VTEP=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.spec.vtepCIDR}' 2>/dev/null)
+CLUSTER2_VTEP=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.spec.vtepCIDR}' 2>/dev/null)
 
 if [[ -n "$CLUSTER1_VTEP" ]] && [[ -n "$CLUSTER2_VTEP" ]] && [[ "$CLUSTER1_VTEP" != "$CLUSTER2_VTEP" ]]; then
     log_info "VTEP CIDR allocation: cluster1=$CLUSTER1_VTEP, cluster2=$CLUSTER2_VTEP (unique ✓)"
@@ -112,11 +114,11 @@ else
 fi
 
 # Check endpoints reported
-CLUSTER1_ENDPOINTS=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.status.endpoints}' 2>/dev/null)
-CLUSTER2_ENDPOINTS=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.status.endpoints}' 2>/dev/null)
+CLUSTER1_ENDPOINTS=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.status.endpoints}' 2>/dev/null)
+CLUSTER2_ENDPOINTS=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.status.endpoints}' 2>/dev/null)
 
 if [[ -n "$CLUSTER1_ENDPOINTS" ]] && [[ "$CLUSTER1_ENDPOINTS" != "[]" ]]; then
-    CLUSTER1_ENDPOINT_COUNT=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.status.endpoints}' | jq '. | length')
+    CLUSTER1_ENDPOINT_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster1 -o jsonpath='{.status.endpoints}' | jq '. | length')
     log_info "Cluster1 has $CLUSTER1_ENDPOINT_COUNT node endpoint(s) reported"
     ((check_passed++))
 else
@@ -125,7 +127,7 @@ else
 fi
 
 if [[ -n "$CLUSTER2_ENDPOINTS" ]] && [[ "$CLUSTER2_ENDPOINTS" != "[]" ]]; then
-    CLUSTER2_ENDPOINT_COUNT=$(kubectl --context ${CLUSTER1} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.status.endpoints}' | jq '. | length')
+    CLUSTER2_ENDPOINT_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get cluster cluster2 -o jsonpath='{.status.endpoints}' | jq '. | length')
     log_info "Cluster2 has $CLUSTER2_ENDPOINT_COUNT node endpoint(s) reported"
     ((check_passed++))
 else
@@ -140,15 +142,15 @@ fi
 log_section "Phase 3: VTEP Resources"
 
 # Check if VTEPs are created for remote clusters
-check "kubectl --context ${CLUSTER1} get vtep cluster2" \
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep cluster2" \
     "Cluster1 has VTEP for cluster2"
 
-check "kubectl --context ${CLUSTER2} get vtep cluster1" \
+check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get vtep cluster1" \
     "Cluster2 has VTEP for cluster1"
 
 # Check VTEP endpoints
-if kubectl --context ${CLUSTER1} get vtep cluster2 -o yaml > /dev/null 2>&1; then
-    VTEP_ENDPOINTS=$(kubectl --context ${CLUSTER1} get vtep cluster2 -o jsonpath='{.spec.endpoints}' | jq '. | length')
+if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep cluster2 -o yaml > /dev/null 2>&1; then
+    VTEP_ENDPOINTS=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep cluster2 -o jsonpath='{.spec.endpoints}' | jq '. | length')
     if [[ "$VTEP_ENDPOINTS" -gt 0 ]]; then
         log_info "Cluster1's VTEP for cluster2 has $VTEP_ENDPOINTS endpoint(s)"
         ((check_passed++))
@@ -165,15 +167,15 @@ fi
 log_section "Phase 4: FRRConfiguration (BGP Config)"
 
 # Check if FRRConfiguration exists
-check "kubectl --context ${CLUSTER1} get frrconfiguration skynet-bgp-config" \
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config" \
     "Cluster1 has FRRConfiguration"
 
-check "kubectl --context ${CLUSTER2} get frrconfiguration skynet-bgp-config" \
+check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-config" \
     "Cluster2 has FRRConfiguration"
 
 # Check BGP neighbors configured
-if kubectl --context ${CLUSTER1} get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
-    NEIGHBOR_COUNT=$(kubectl --context ${CLUSTER1} get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
+if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
+    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
     if [[ "$NEIGHBOR_COUNT" -gt 0 ]]; then
         log_info "Cluster1 FRRConfiguration has $NEIGHBOR_COUNT BGP neighbor(s)"
         ((check_passed++))
@@ -183,8 +185,8 @@ if kubectl --context ${CLUSTER1} get frrconfiguration skynet-bgp-config -o yaml 
     fi
 fi
 
-if kubectl --context ${CLUSTER2} get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
-    NEIGHBOR_COUNT=$(kubectl --context ${CLUSTER2} get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
+if kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
+    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
     if [[ "$NEIGHBOR_COUNT" -gt 0 ]]; then
         log_info "Cluster2 FRRConfiguration has $NEIGHBOR_COUNT BGP neighbor(s)"
         ((check_passed++))
@@ -195,7 +197,7 @@ if kubectl --context ${CLUSTER2} get frrconfiguration skynet-bgp-config -o yaml 
 fi
 
 # Check address family configuration (should be l2vpn/evpn)
-if kubectl --context ${CLUSTER1} get frrconfiguration skynet-bgp-config -o yaml 2>/dev/null | grep -q "l2vpn"; then
+if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config -o yaml 2>/dev/null | grep -q "l2vpn"; then
     log_info "Cluster1 FRRConfiguration has L2VPN EVPN address family"
     ((check_passed++))
 else
@@ -209,15 +211,15 @@ fi
 
 log_section "Phase 5: FRR-K8s Status (if available)"
 
-FRR_POD1=$(kubectl --context ${CLUSTER1} -n frr-k8s-system get pod -l app.kubernetes.io/name=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-FRR_POD2=$(kubectl --context ${CLUSTER2} -n frr-k8s-system get pod -l app.kubernetes.io/name=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+FRR_POD1=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get pod -l app.kubernetes.io/name=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+FRR_POD2=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get pod -l app.kubernetes.io/name=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
 if [[ -n "$FRR_POD1" ]]; then
     log_info "FRR pod running on cluster1: $FRR_POD1"
 
     # Try to get BGP summary
     log_warn "To check BGP sessions on cluster1, run:"
-    echo "  kubectl --context ${CLUSTER1} -n frr-k8s-system exec -it $FRR_POD1 -- vtysh -c 'show bgp summary'"
+    echo "  kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system exec -it $FRR_POD1 -- vtysh -c 'show bgp summary'"
 else
     log_warn "FRR-K8s not found on cluster1 (install FRR-K8s for BGP functionality)"
 fi
@@ -226,7 +228,7 @@ if [[ -n "$FRR_POD2" ]]; then
     log_info "FRR pod running on cluster2: $FRR_POD2"
 
     log_warn "To check BGP sessions on cluster2, run:"
-    echo "  kubectl --context ${CLUSTER2} -n frr-k8s-system exec -it $FRR_POD2 -- vtysh -c 'show bgp summary'"
+    echo "  kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system exec -it $FRR_POD2 -- vtysh -c 'show bgp summary'"
 else
     log_warn "FRR-K8s not found on cluster2 (install FRR-K8s for BGP functionality)"
 fi
@@ -255,8 +257,8 @@ else
     log_error "Some checks failed. Review the output above."
     echo ""
     echo "Troubleshooting tips:"
-    echo "1. Check agent logs: kubectl --context ${CLUSTER1} -n ${AGENT_NS} logs -l app=skynet-agent"
-    echo "2. Check broker resources: kubectl --context ${CLUSTER1} -n ${BROKER_NS} get clusters -o yaml"
+    echo "1. Check agent logs: kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${AGENT_NS} logs -l app=skynet-agent"
+    echo "2. Check broker resources: kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get clusters -o yaml"
     echo "3. Restart agents if needed: kubectl rollout restart deployment/skynet-agent -n ${AGENT_NS}"
     exit 1
 fi
