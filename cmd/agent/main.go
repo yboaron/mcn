@@ -37,33 +37,34 @@ import (
 	"github.com/submariner-io/admiral/pkg/util"
 	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
 	"github.com/aswinsuryana/skynet/pkg/agent"
+	"github.com/aswinsuryana/skynet/pkg/agent/bootstrap"
 	"github.com/aswinsuryana/skynet/pkg/agent/controller"
+	"github.com/aswinsuryana/skynet/pkg/operator/alloc"
 )
-
-var (
-	clusterID        string
-	brokerKubeconfig string
-	brokerNamespace  string
-	brokerServer     string
-	brokerToken      string
-	brokerCAData     string
-)
-
-func init() {
-	flag.StringVar(&clusterID, "cluster-id", "", "Unique identifier for this cluster")
-	flag.StringVar(&brokerKubeconfig, "broker-kubeconfig", "", "Path to broker kubeconfig file")
-	flag.StringVar(&brokerNamespace, "broker-namespace", "skynet-broker", "Namespace on broker cluster for SkyNet resources")
-	flag.StringVar(&brokerServer, "broker-server", "", "Broker API server URL (alternative to kubeconfig)")
-	flag.StringVar(&brokerToken, "broker-token", "", "Broker service account token (alternative to kubeconfig)")
-	flag.StringVar(&brokerCAData, "broker-ca-data", "", "Broker CA certificate data (alternative to kubeconfig)")
-}
 
 func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	if clusterID == "" {
-		klog.Fatal("--cluster-id is required")
+	env := bootstrap.LoadEnv()
+	if env.ClusterID == "" {
+		klog.Fatal("cluster id is required (set env " + bootstrap.EnvClusterID + ")")
+	}
+	clusterID := env.ClusterID
+	brokerNamespace := env.BrokerNamespace
+	if !env.HasPreallocatedNetwork() {
+		klog.Fatalf("Operator must inject VTEP and ASN: set env %s and %s (from Skynet status)",
+			bootstrap.EnvAllocatedVtepCIDR, bootstrap.EnvAllocatedASN)
+	}
+	if !env.HasBrokerPoolEnv() {
+		klog.Fatalf("Operator must inject broker pool bounds: set env %s, %s, %s, %s (from broker ConfigMap %s)",
+			bootstrap.EnvPoolASNMin, bootstrap.EnvPoolASNMax, bootstrap.EnvPoolVtepCIDR, bootstrap.EnvPoolVtepPrefixLen,
+			alloc.BrokerPoolsConfigMap)
+	}
+
+	pools, err := alloc.PoolsFromValues(env.PoolASNMin, env.PoolASNMax, env.PoolVtepCIDR, env.PoolVtepPrefixLen)
+	if err != nil {
+		klog.Fatalf("Invalid broker pool env: %v", err)
 	}
 
 	klog.Infof("Starting SkyNet Agent for cluster: %s", clusterID)
@@ -92,8 +93,7 @@ func main() {
 		klog.Fatalf("Failed to create local kubernetes client: %v", err)
 	}
 
-	// Get broker cluster config
-	brokerConfig, err := getBrokerConfig()
+	brokerConfig, err := getBrokerConfig(&env)
 	if err != nil {
 		klog.Fatalf("Failed to get broker config: %v", err)
 	}
@@ -130,17 +130,22 @@ func main() {
 		klog.Fatalf("Failed to setup MCNC controller: %v", err)
 	}
 
-	// Create and start agent
+	klog.Infof("Using operator allocation from env (%s, %s)",
+		bootstrap.EnvAllocatedVtepCIDR, bootstrap.EnvAllocatedASN)
+
 	agentConfig := &agent.Config{
-		ClusterID:      clusterID,
-		LocalClient:    localDynamicClient,
-		LocalK8sClient: localK8sClient,
-		LocalConfig:    localConfig,
-		RestMapper:     restMapper,
-		BrokerClient:   brokerClient,
-		BrokerConfig:   brokerConfig,
-		BrokerNS:       brokerNamespace,
-		Manager:        mgr,
+		ClusterID:        clusterID,
+		OperatorVtepCIDR: env.AllocatedVtepCIDR,
+		OperatorASN:      env.AllocatedASN,
+		BrokerPools:      pools,
+		LocalClient:          localDynamicClient,
+		LocalK8sClient:       localK8sClient,
+		LocalConfig:          localConfig,
+		RestMapper:           restMapper,
+		BrokerClient:         brokerClient,
+		BrokerConfig:         brokerConfig,
+		BrokerNS:             brokerNamespace,
+		Manager:              mgr,
 	}
 
 	skynetAgent, err := agent.NewAgent(agentConfig)
@@ -166,28 +171,26 @@ func main() {
 	skynetAgent.Stop()
 }
 
-// getBrokerConfig returns the REST config for the broker cluster
-func getBrokerConfig() (*rest.Config, error) {
-	// Try kubeconfig file first
-	if brokerKubeconfig != "" {
-		config, err := clientcmd.BuildConfigFromFlags("", brokerKubeconfig)
+// getBrokerConfig returns the REST config for the broker cluster from environment.
+// Either SKYNET_BROKER_KUBECONFIG (path) or SKYNET_BROKER_API_SERVER + SKYNET_BROKER_TOKEN (Submariner-style).
+func getBrokerConfig(env *bootstrap.FromEnvironment) (*rest.Config, error) {
+	if env.BrokerKubeconfigPath != "" {
+		config, err := clientcmd.BuildConfigFromFlags("", env.BrokerKubeconfigPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load broker kubeconfig: %w", err)
 		}
-		klog.Info("Using broker kubeconfig file")
+		klog.Info("Using broker kubeconfig from " + bootstrap.EnvBrokerKubeconfig)
 		return config, nil
 	}
 
-	// Try server/token/ca-data
-	if brokerServer != "" && brokerToken != "" {
+	if env.BrokerAPIServer != "" && env.BrokerToken != "" {
 		config := &rest.Config{
-			Host:        brokerServer,
-			BearerToken: brokerToken,
+			Host:        env.BrokerAPIServer,
+			BearerToken: env.BrokerToken,
 		}
-
-		if brokerCAData != "" {
+		if env.BrokerCA != "" {
 			config.TLSClientConfig = rest.TLSClientConfig{
-				CAData: []byte(brokerCAData),
+				CAData: []byte(env.BrokerCA),
 			}
 		} else {
 			config.TLSClientConfig = rest.TLSClientConfig{
@@ -195,10 +198,10 @@ func getBrokerConfig() (*rest.Config, error) {
 			}
 			klog.Warning("No broker CA data provided, using insecure TLS")
 		}
-
-		klog.Info("Using broker server/token configuration")
+		klog.Info("Using broker API server and token from environment")
 		return config, nil
 	}
 
-	return nil, fmt.Errorf("broker configuration not provided - need either --broker-kubeconfig or --broker-server/--broker-token")
+	return nil, fmt.Errorf("broker configuration not provided (set %s and %s, or %s)",
+		bootstrap.EnvBrokerAPIServer, bootstrap.EnvBrokerToken, bootstrap.EnvBrokerKubeconfig)
 }

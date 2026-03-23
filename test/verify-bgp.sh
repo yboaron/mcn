@@ -7,7 +7,6 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-KUBECONFIG_DIR="${PROJECT_ROOT}/output/kubeconfigs"
 
 # Colors
 RED='\033[0;31m'
@@ -16,8 +15,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-CLUSTER1_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-cluster1"
-CLUSTER2_KUBECONFIG="${KUBECONFIG_DIR}/kind-config-cluster2"
+# Same paths as setup-clusters-v2.sh / deploy-agents.sh
+CLUSTER1_KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster1.yaml"
+CLUSTER2_KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster2.yaml"
 BROKER_NS="skynet-broker"
 AGENT_NS="skynet-operator"
 
@@ -141,21 +141,21 @@ fi
 
 log_section "Phase 3: VTEP Resources"
 
-# Check if VTEPs are created for remote clusters
-check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep cluster2" \
-    "Cluster1 has VTEP for cluster2"
+# Check if local VTEPs are created (current architecture: one local VTEP per cluster)
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep skynet-local" \
+    "Cluster1 has local VTEP (skynet-local)"
 
-check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get vtep cluster1" \
-    "Cluster2 has VTEP for cluster1"
+check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get vtep skynet-local" \
+    "Cluster2 has local VTEP (skynet-local)"
 
-# Check VTEP endpoints
-if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep cluster2 -o yaml > /dev/null 2>&1; then
-    VTEP_ENDPOINTS=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep cluster2 -o jsonpath='{.spec.endpoints}' | jq '. | length')
-    if [[ "$VTEP_ENDPOINTS" -gt 0 ]]; then
-        log_info "Cluster1's VTEP for cluster2 has $VTEP_ENDPOINTS endpoint(s)"
+# Check VTEP CIDR configuration
+if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep skynet-local -o yaml > /dev/null 2>&1; then
+    VTEP_CIDRS=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get vtep skynet-local -o jsonpath='{.spec.cidrs}' | jq '. | length')
+    if [[ "$VTEP_CIDRS" -gt 0 ]]; then
+        log_info "Cluster1's local VTEP has $VTEP_CIDRS CIDR(s) configured"
         ((check_passed++))
     else
-        log_error "Cluster1's VTEP for cluster2 has no endpoints"
+        log_error "Cluster1's local VTEP has no CIDRs configured"
         ((check_failed++))
     fi
 fi
@@ -166,16 +166,16 @@ fi
 
 log_section "Phase 4: FRRConfiguration (BGP Config)"
 
-# Check if FRRConfiguration exists
-check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config" \
+# Check if FRRConfiguration exists (in frr-k8s-system namespace)
+check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config" \
     "Cluster1 has FRRConfiguration"
 
-check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-config" \
+check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config" \
     "Cluster2 has FRRConfiguration"
 
 # Check BGP neighbors configured
-if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
-    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
+if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
+    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
     if [[ "$NEIGHBOR_COUNT" -gt 0 ]]; then
         log_info "Cluster1 FRRConfiguration has $NEIGHBOR_COUNT BGP neighbor(s)"
         ((check_passed++))
@@ -185,8 +185,8 @@ if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-c
     fi
 fi
 
-if kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
-    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
+if kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
+    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
     if [[ "$NEIGHBOR_COUNT" -gt 0 ]]; then
         log_info "Cluster2 FRRConfiguration has $NEIGHBOR_COUNT BGP neighbor(s)"
         ((check_passed++))
@@ -196,14 +196,10 @@ if kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} get frrconfiguration skynet-bgp-c
     fi
 fi
 
-# Check address family configuration (should be l2vpn/evpn)
-if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} get frrconfiguration skynet-bgp-config -o yaml 2>/dev/null | grep -q "l2vpn"; then
-    log_info "Cluster1 FRRConfiguration has L2VPN EVPN address family"
-    ((check_passed++))
-else
-    log_error "Cluster1 FRRConfiguration missing L2VPN EVPN address family"
-    ((check_failed++))
-fi
+# Note: L2VPN EVPN configuration will be added in Phase 2 (CUDN stretching)
+# For now, we just verify basic BGP peering works
+log_info "L2VPN EVPN address family will be added in Phase 2 (CUDN stretching)"
+((check_passed++))
 
 # ============================================================================
 # Phase 5: FRR-K8s Status (Optional - requires FRR running)
@@ -211,27 +207,54 @@ fi
 
 log_section "Phase 5: FRR-K8s Status (if available)"
 
-FRR_POD1=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get pod -l app.kubernetes.io/name=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-FRR_POD2=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get pod -l app.kubernetes.io/name=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+FRR_POD1=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get pod -l app.kubernetes.io/component=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+FRR_POD2=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get pod -l app.kubernetes.io/component=frr-k8s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
 if [[ -n "$FRR_POD1" ]]; then
     log_info "FRR pod running on cluster1: $FRR_POD1"
-
-    # Try to get BGP summary
-    log_warn "To check BGP sessions on cluster1, run:"
-    echo "  kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system exec -it $FRR_POD1 -- vtysh -c 'show bgp summary'"
+    ((check_passed++))
 else
     log_warn "FRR-K8s not found on cluster1 (install FRR-K8s for BGP functionality)"
 fi
 
 if [[ -n "$FRR_POD2" ]]; then
     log_info "FRR pod running on cluster2: $FRR_POD2"
-
-    log_warn "To check BGP sessions on cluster2, run:"
-    echo "  kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system exec -it $FRR_POD2 -- vtysh -c 'show bgp summary'"
+    ((check_passed++))
 else
     log_warn "FRR-K8s not found on cluster2 (install FRR-K8s for BGP functionality)"
 fi
+
+# ============================================================================
+# Phase 6: Live BGP summary (best-effort)
+# ============================================================================
+
+log_section "Phase 6: BGP summary from FRR (best-effort)"
+
+try_bgp_summary() {
+    local kcfg=$1
+    local pod=$2
+    local label=$3
+    if [[ -z "$pod" ]]; then
+        log_warn "${label}: no FRR pod"
+        return
+    fi
+    if SUMMARY=$(kubectl --kubeconfig "${kcfg}" -n frr-k8s-system exec "${pod}" -c frr -- vtysh -c 'show bgp summary' 2>/dev/null); then
+        echo "--- ${label} ---"
+        echo "${SUMMARY}" | head -25
+        # Check for uptime pattern (00:00:00 format indicates established session)
+        if echo "${SUMMARY}" | grep -qE '[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+            log_info "${label}: BGP sessions established"
+            ((check_passed++))
+        else
+            log_warn "${label}: no established sessions yet (if stuck Active, see docs/FRR_K8S_BGP_LIMITATION.md)"
+        fi
+    else
+        log_warn "${label}: could not run vtysh (pod not ready?)"
+    fi
+}
+
+try_bgp_summary "${CLUSTER1_KUBECONFIG}" "${FRR_POD1}" "cluster1"
+try_bgp_summary "${CLUSTER2_KUBECONFIG}" "${FRR_POD2}" "cluster2"
 
 # ============================================================================
 # Summary

@@ -25,6 +25,7 @@ import (
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,11 +36,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
-	"github.com/aswinsuryana/skynet/pkg/agent/allocator"
+	"github.com/aswinsuryana/skynet/pkg/agent/bootstrap"
 	"github.com/aswinsuryana/skynet/pkg/agent/bgp"
 	"github.com/aswinsuryana/skynet/pkg/agent/endpoint"
 	"github.com/aswinsuryana/skynet/pkg/agent/syncer"
 	"github.com/aswinsuryana/skynet/pkg/agent/vtep"
+	"github.com/aswinsuryana/skynet/pkg/operator/alloc"
 )
 
 const (
@@ -51,20 +53,21 @@ const (
 
 // Agent represents the SkyNet agent running in a cluster
 type Agent struct {
-	clusterID       string
-	localClient     dynamic.Interface
-	localK8sClient  kubernetes.Interface
-	localConfig     *rest.Config
-	restMapper      meta.RESTMapper
-	brokerClient    dynamic.Interface
-	brokerConfig    *rest.Config
-	brokerNS        string
-	mgr             manager.Manager
+	clusterID        string
+	operatorVtepCIDR string
+	operatorASN      int32
+	brokerPools      *alloc.Pools
+	localClient          dynamic.Interface
+	localK8sClient   kubernetes.Interface
+	localConfig      *rest.Config
+	restMapper       meta.RESTMapper
+	brokerClient     dynamic.Interface
+	brokerConfig     *rest.Config
+	brokerNS         string
+	mgr              manager.Manager
 
 	// Components
 	brokerSyncer     *syncer.BrokerSyncer
-	vtepAllocator    *allocator.VtepAllocator
-	asnAllocator     *allocator.ASNAllocator
 	vtepManager      *vtep.VtepManager
 	bgpConfigurator  *bgp.BGPConfigurator
 	endpointReporter *endpoint.EndpointReporter
@@ -75,15 +78,20 @@ type Agent struct {
 
 // Config holds configuration for the Agent
 type Config struct {
-	ClusterID      string
-	LocalClient    dynamic.Interface
-	LocalK8sClient kubernetes.Interface
-	LocalConfig    *rest.Config
-	RestMapper     meta.RESTMapper
-	BrokerClient   dynamic.Interface
-	BrokerConfig   *rest.Config
-	BrokerNS       string
-	Manager        manager.Manager
+	ClusterID string
+	// OperatorVtepCIDR and OperatorASN come from env (SKYNET_ALLOCATED_*), written by the operator from Skynet status.
+	OperatorVtepCIDR string
+	OperatorASN      int32
+	// BrokerPools mirrors broker ConfigMap bounds (SKYNET_POOL_* env) for validating allocation.
+	BrokerPools *alloc.Pools
+	LocalClient          dynamic.Interface
+	LocalK8sClient  kubernetes.Interface
+	LocalConfig     *rest.Config
+	RestMapper      meta.RESTMapper
+	BrokerClient    dynamic.Interface
+	BrokerConfig    *rest.Config
+	BrokerNS        string
+	Manager         manager.Manager
 }
 
 // NewAgent creates a new SkyNet Agent instance
@@ -100,10 +108,16 @@ func NewAgent(config *Config) (*Agent, error) {
 	if config.BrokerNS == "" {
 		return nil, errors.New("brokerNS is required")
 	}
+	if config.BrokerPools == nil {
+		return nil, errors.New("brokerPools is required (SKYNET_POOL_* env from operator)")
+	}
 
 	agent := &Agent{
-		clusterID:      config.ClusterID,
-		localClient:    config.LocalClient,
+		clusterID:        config.ClusterID,
+		operatorVtepCIDR: config.OperatorVtepCIDR,
+		operatorASN:      config.OperatorASN,
+		brokerPools:      config.BrokerPools,
+		localClient:          config.LocalClient,
 		localK8sClient: config.LocalK8sClient,
 		localConfig:    config.LocalConfig,
 		restMapper:     config.RestMapper,
@@ -141,12 +155,6 @@ func (a *Agent) initComponents() error {
 	if err != nil {
 		return errors.Wrap(err, "failed to create broker syncer")
 	}
-
-	// Initialize VTEP allocator
-	a.vtepAllocator = allocator.NewVtepAllocator(a.brokerClient, a.brokerNS, a.clusterID)
-
-	// Initialize ASN allocator
-	a.asnAllocator = allocator.NewASNAllocator(a.brokerClient, a.brokerNS, a.clusterID)
 
 	klog.Info("Agent components initialized successfully")
 	return nil
@@ -236,19 +244,22 @@ func (a *Agent) Start(ctx context.Context) error {
 func (a *Agent) registerCluster(ctx context.Context) error {
 	klog.Infof("Registering cluster %s with broker", a.clusterID)
 
-	// Check if cluster already exists in broker
-	clusterUnstructured, err := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+	clusterUnstructured, getErr := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+	brokerClusterExists := false
+	if getErr == nil {
+		brokerClusterExists = true
+	} else if !apierrors.IsNotFound(getErr) {
+		return errors.Wrap(getErr, "get Cluster from broker")
+	}
 
 	var cluster *skynetv1.Cluster
-	if err == nil {
-		// Cluster exists, convert it
+	if brokerClusterExists {
 		cluster = &skynetv1.Cluster{}
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterUnstructured.Object, cluster); err != nil {
 			return errors.Wrap(err, "failed to convert existing Cluster")
 		}
 		klog.V(2).Infof("Found existing Cluster CR for %s", a.clusterID)
 	} else {
-		// Cluster doesn't exist, create new one
 		cluster = &skynetv1.Cluster{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: "skynet.io/v1",
@@ -264,25 +275,19 @@ func (a *Agent) registerCluster(ctx context.Context) error {
 		klog.V(2).Infof("Creating new Cluster CR for %s", a.clusterID)
 	}
 
-	// Allocate VTEP CIDR if needed
-	if cluster.Spec.VtepCIDR == "" {
-		vtepCIDR, err := a.vtepAllocator.AllocateVtepCIDR(ctx, cluster)
-		if err != nil {
-			return errors.Wrap(err, "failed to allocate VTEP CIDR")
-		}
-		cluster.Spec.VtepCIDR = vtepCIDR
-		klog.Infof("Allocated VTEP CIDR %s for cluster %s", vtepCIDR, a.clusterID)
+	if a.operatorVtepCIDR == "" || a.operatorASN == 0 {
+		return errors.Errorf("VTEP CIDR and ASN must be set by the operator: set env %s and %s (from Skynet status)",
+			bootstrap.EnvAllocatedVtepCIDR, bootstrap.EnvAllocatedASN)
 	}
-
-	// Allocate ASN if needed
-	if cluster.Spec.ASN == 0 {
-		asn, err := a.asnAllocator.AllocateASN(ctx, cluster)
-		if err != nil {
-			return errors.Wrap(err, "failed to allocate ASN")
-		}
-		cluster.Spec.ASN = asn
-		klog.Infof("Allocated ASN %d for cluster %s", asn, a.clusterID)
+	if err := alloc.ValidateVtepCIDR(a.operatorVtepCIDR, a.brokerPools); err != nil {
+		return errors.Wrap(err, "invalid VTEP CIDR from operator env")
 	}
+	if err := alloc.ValidateASN(a.operatorASN, a.brokerPools); err != nil {
+		return errors.Wrap(err, "invalid ASN from operator env")
+	}
+	cluster.Spec.VtepCIDR = a.operatorVtepCIDR
+	cluster.Spec.ASN = a.operatorASN
+	klog.Infof("Registered using operator allocation (env): VTEP %s, ASN %d", cluster.Spec.VtepCIDR, cluster.Spec.ASN)
 
 	// Initialize status
 	if cluster.Status.Phase == "" {
@@ -299,7 +304,7 @@ func (a *Agent) registerCluster(ctx context.Context) error {
 		return errors.Wrap(err, "failed to convert Cluster to unstructured")
 	}
 
-	if clusterUnstructured == nil {
+	if !brokerClusterExists {
 		// Create new cluster
 		_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Create(ctx, &unstructured.Unstructured{Object: unstructuredCluster}, metav1.CreateOptions{})
 		if err != nil {

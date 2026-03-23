@@ -35,3 +35,8 @@ go.work.sum
 
 # Output directory (kubeconfigs, test artifacts)
 output/
+
+# Test artifacts
+test/kubeconfig-*.yaml
+test/broker-*.txt
+test/verify-bgp

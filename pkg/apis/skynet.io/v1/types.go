@@ -26,8 +26,13 @@ import (
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:resource:scope=Namespaced
 
-// Skynet is the configuration for SkyNet multi-cluster networking on a local cluster.
-// User applies this CR to join the cluster to the clusterset.
+// Skynet is the primary install/configuration resource for SkyNet on a cluster, analogous to
+// submariner.io/v1 Submariner. The skynet-operator watches this CR, reconciles broker connectivity,
+// allocates VTEP CIDR and ASN (or validates spec overrides), writes them to status, and creates the
+// skynet-agent Deployment with configuration via environment variables (see docs/SKYNET_OPERATOR_CONTRACT.md).
+//
+// The skynet-agent requires SKYNET_ALLOCATED_VTEP_CIDR and SKYNET_ALLOCATED_ASN (mirrored from status);
+// broker/cluster identity may still use flags or env.
 type Skynet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -46,17 +51,49 @@ type SkynetSpec struct {
 	// +kubebuilder:validation:Required
 	BrokerConfig BrokerConfig `json:"brokerConfig"`
 
+	// VtepCIDR is an optional user-supplied VTEP CIDR for this cluster (/16 within the deployment VTEP pool).
+	// When empty, the operator allocates one from the broker pool.
+	// +optional
+	VtepCIDR string `json:"vtepCIDR,omitempty"`
+
+	// ASN is an optional user-supplied BGP private ASN (RFC 6996 range). When zero, the operator allocates one.
+	// +optional
+	// +kubebuilder:validation:Minimum=64512
+	// +kubebuilder:validation:Maximum=65534
+	ASN int32 `json:"asn,omitempty"`
+
 	// RouteReflectorCount is the number of Route Reflector nodes
 	// 0 = full mesh mode, >0 = RR mode with auto-selection
 	// +optional
 	// +kubebuilder:default=0
 	RouteReflectorCount int `json:"routeReflectorCount,omitempty"`
+
+	// Agent controls how the operator deploys skynet-agent on this cluster (image, replicas).
+	// +optional
+	Agent *SkynetAgentSpec `json:"agent,omitempty"`
+}
+
+// SkynetAgentSpec is input for the operator when creating the skynet-agent Deployment.
+type SkynetAgentSpec struct {
+	// Image overrides the agent container image. Empty means the operator default (e.g. RELATED_IMAGE_AGENT).
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Replicas is the agent Deployment replicas (typically 1).
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 type BrokerConfig struct {
 	// Server is the broker API server URL
 	// +kubebuilder:validation:Required
 	Server string `json:"server"`
+
+	// BrokerNamespace is the namespace on the broker cluster where SkyNet stores Cluster and related CRs.
+	// Defaults to "skynet-broker" when empty (same default as SKYNET_BROKER_NAMESPACE on the agent).
+	// +optional
+	BrokerNamespace string `json:"brokerNamespace,omitempty"`
 
 	// TokenSecretRef is the reference to the secret containing broker credentials
 	// +kubebuilder:validation:Required
@@ -78,13 +115,23 @@ type SkynetStatus struct {
 	// +optional
 	Phase SkynetPhase `json:"phase,omitempty"`
 
-	// VtepCIDR is the allocated VTEP CIDR for this cluster
+	// VtepCIDR is the effective VTEP CIDR after operator allocation (or spec override).
+	// The operator should mirror this into the agent pod env SKYNET_ALLOCATED_VTEP_CIDR.
 	// +optional
 	VtepCIDR string `json:"vtepCIDR,omitempty"`
 
-	// ASN is the allocated BGP ASN for this cluster
+	// ASN is the effective BGP ASN after operator allocation (or spec override).
+	// The operator should mirror this into the agent pod env SKYNET_ALLOCATED_ASN.
 	// +optional
 	ASN int32 `json:"asn,omitempty"`
+
+	// AgentReady indicates the operator considers the skynet-agent Deployment available.
+	// +optional
+	AgentReady bool `json:"agentReady,omitempty"`
+
+	// ObservedGeneration is the metadata.generation last fully reconciled by the operator.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Conditions represent the latest available observations of the Skynet state
 	// +optional
@@ -127,13 +174,13 @@ type ClusterSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	ClusterID string `json:"clusterID"`
 
-	// VtepCIDR is the allocated VTEP CIDR for this cluster
-	// Allocated by SkyNet agent using optimistic locking
+	// VtepCIDR is the VTEP CIDR for this cluster on the broker.
+	// Set by the skynet-operator (Skynet status → agent env); the agent registers this value on the broker Cluster CR.
 	// +kubebuilder:validation:Required
 	VtepCIDR string `json:"vtepCIDR"`
 
-	// ASN is the allocated BGP ASN for this cluster
-	// Allocated by SkyNet agent using optimistic locking
+	// ASN is the BGP ASN for this cluster on the broker.
+	// Set by the skynet-operator (Skynet status → agent env); the agent registers this value on the broker Cluster CR.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=64512
 	// +kubebuilder:validation:Maximum=65534

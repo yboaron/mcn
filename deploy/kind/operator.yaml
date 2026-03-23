@@ -1,35 +1,35 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mcn-operator
-  namespace: mcn-system
+  name: skynet-operator
+  namespace: skynet-operator
   labels:
-    app.kubernetes.io/name: mcn
-    app.kubernetes.io/component: mcn-operator
-    app.kubernetes.io/managed-by: mcn-operator
+    app.kubernetes.io/name: skynet
+    app.kubernetes.io/component: skynet-operator
+    app.kubernetes.io/managed-by: skynet-operator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: mcn
-      app.kubernetes.io/component: mcn-operator
+      app.kubernetes.io/name: skynet
+      app.kubernetes.io/component: skynet-operator
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: mcn
-        app.kubernetes.io/component: mcn-operator
-        app.kubernetes.io/managed-by: mcn-operator
+        app.kubernetes.io/name: skynet
+        app.kubernetes.io/component: skynet-operator
+        app.kubernetes.io/managed-by: skynet-operator
     spec:
-      serviceAccountName: mcn-operator
+      serviceAccountName: skynet-operator
       containers:
-        - name: mcn-operator
-          image: quay.io/aswinsuryan/skynet:mcn-operator-latest
-          imagePullPolicy: Never
+        - name: skynet-operator
+          image: quay.io/aswinsuryan/skynet:skynet-operator-latest
+          imagePullPolicy: Always
           env:
             - name: RELATED_IMAGE_BROKER
-              value: quay.io/aswinsuryan/skynet:mcn-broker-latest
+              value: quay.io/aswinsuryan/skynet:skynet-broker-latest
             - name: RELATED_IMAGE_AGENT
-              value: quay.io/aswinsuryan/skynet:mcn-agent-latest
+              value: quay.io/aswinsuryan/skynet:skynet-agent-latest
           resources:
             requests:
               cpu: 50m

@@ -31,22 +31,29 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/submariner-io/admiral/pkg/log/kzerolog"
+	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
 	"github.com/aswinsuryana/skynet/pkg/names"
+	skynetctrl "github.com/aswinsuryana/skynet/pkg/operator/skynet"
 )
 
-var log = logf.Log.WithName("mcn-operator")
+var log = logf.Log.WithName("skynet-operator")
 
 func main() {
 	kzerolog.AddFlags(nil)
 	flag.Parse()
 	kzerolog.InitK8sLogging()
 
-	log.Info("MCN operator starting")
+	log.Info("Skynet operator starting")
 
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -60,8 +67,39 @@ func main() {
 		os.Exit(1)
 	}
 
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(skynetv1.AddToScheme(scheme))
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: "0",
+		},
+	})
+	if err != nil {
+		log.Error(err, "Failed to create controller-runtime manager")
+		os.Exit(1)
+	}
+
+	if err := (&skynetctrl.Reconciler{
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		AgentImage: agentImage(),
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "Failed to register Skynet reconciler")
+		os.Exit(1)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	go func() {
+		if err := mgr.Start(ctx); err != nil {
+			log.Error(err, "controller manager exited")
+			os.Exit(1)
+		}
+	}()
 
 	if err := ensureNamespace(ctx, client); err != nil {
 		log.Error(err, "Failed to ensure namespace")
@@ -83,29 +121,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := ensureDeployment(ctx, client, names.AgentComponent, agentImage()); err != nil {
-		log.Error(err, "Failed to ensure agent Deployment")
-		os.Exit(1)
-	}
+	log.Info("Skynet operator running — broker Deployment + Skynet reconciliation (agent is created per Skynet CR, Submariner-style)")
 
-	log.Info("MCN operator running — broker and agent deployments are up")
-
-	// Re-check every 30s so manually deleted resources are re-created automatically.
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("MCN operator shutting down")
+			log.Info("Skynet operator shutting down")
 			return
 		case <-ticker.C:
 			if err := ensureDeployment(ctx, client, names.BrokerComponent, brokerImage()); err != nil {
 				log.Error(err, "Failed to reconcile broker Deployment")
-			}
-
-			if err := ensureDeployment(ctx, client, names.AgentComponent, agentImage()); err != nil {
-				log.Error(err, "Failed to reconcile agent Deployment")
 			}
 		}
 	}

@@ -1,21 +1,21 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: mcn-operator
-  namespace: mcn-system
+  name: skynet-operator
+  namespace: skynet-operator
   labels:
-    app.kubernetes.io/name: mcn
-    app.kubernetes.io/component: mcn-operator
-    app.kubernetes.io/managed-by: mcn-operator
+    app.kubernetes.io/name: skynet
+    app.kubernetes.io/component: skynet-operator
+    app.kubernetes.io/managed-by: skynet-operator
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: mcn-operator
+  name: skynet-operator
   labels:
-    app.kubernetes.io/name: mcn
-    app.kubernetes.io/component: mcn-operator
-    app.kubernetes.io/managed-by: mcn-operator
+    app.kubernetes.io/name: skynet
+    app.kubernetes.io/component: skynet-operator
+    app.kubernetes.io/managed-by: skynet-operator
 rules:
   # Operator manages broker and agent Deployments
   - apiGroups: ["apps"]
@@ -29,20 +29,27 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create"]
+  # Skynet controller: reconcile agent Deployment, sync broker secret, update Skynet status
+  - apiGroups: ["skynet.io"]
+    resources: ["skynets", "skynets/status"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: mcn-operator
+  name: skynet-operator
   labels:
-    app.kubernetes.io/name: mcn
-    app.kubernetes.io/component: mcn-operator
-    app.kubernetes.io/managed-by: mcn-operator
+    app.kubernetes.io/name: skynet
+    app.kubernetes.io/component: skynet-operator
+    app.kubernetes.io/managed-by: skynet-operator
 subjects:
   - kind: ServiceAccount
-    name: mcn-operator
-    namespace: mcn-system
+    name: skynet-operator
+    namespace: skynet-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: mcn-operator
+  name: skynet-operator

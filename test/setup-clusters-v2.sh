@@ -153,25 +153,51 @@ create_clusters() {
     log_info "KIND clusters with OVN-Kubernetes created successfully"
 }
 
+# Kubeconfig for a kind cluster (stored in output/ at project root).
+cluster_kubeconfig_path() {
+    local name=$1
+    echo "${PROJECT_ROOT}/output/kubeconfig-${name}.yaml"
+}
+
+ensure_cluster_kubeconfig() {
+    local name=$1
+    if ! kind get clusters 2>/dev/null | grep -q "^${name}$"; then
+        log_error "Kind cluster ${name} not found; cannot write kubeconfig"
+        return 1
+    fi
+    # Ensure output directory exists
+    mkdir -p "${PROJECT_ROOT}/output"
+    kind get kubeconfig --name "$name" >"$(cluster_kubeconfig_path "$name")"
+}
+
+# kubectl using repo-local kubeconfig (avoids stale ~/.kube/config for kind-cluster* contexts).
+kubectl_kind() {
+    local name=$1
+    shift
+    kubectl --kubeconfig "$(cluster_kubeconfig_path "$name")" "$@"
+}
+
 # Verify VTEP CRD is installed
 verify_vtep_crd() {
     log_info "Verifying VTEP CRD is installed..."
 
-    local cluster_ctx="kind-${CLUSTER1_NAME}"
+    ensure_cluster_kubeconfig "${CLUSTER1_NAME}"
+    local kcfg
+    kcfg="$(cluster_kubeconfig_path "${CLUSTER1_NAME}")"
     local max_retries=12
     local retry_interval=5
 
     for i in $(seq 1 $max_retries); do
-        if kubectl --context "$cluster_ctx" get crd vteps.k8s.ovn.org &> /dev/null; then
+        if kubectl --kubeconfig "$kcfg" get crd vteps.k8s.ovn.org &> /dev/null; then
             log_info "✓ VTEP CRD (vteps.k8s.ovn.org) is installed"
 
-            # Show VTEP CRD version
-            local crd_version=$(kubectl --context "$cluster_ctx" get crd vteps.k8s.ovn.org -o jsonpath='{.spec.versions[0].name}')
+            local crd_version
+            crd_version=$(kubectl --kubeconfig "$kcfg" get crd vteps.k8s.ovn.org -o jsonpath='{.spec.versions[0].name}')
             log_info "  VTEP CRD version: $crd_version"
             return 0
         fi
 
-        if [ $i -lt $max_retries ]; then
+        if [ "$i" -lt $max_retries ]; then
             log_warn "VTEP CRD not found yet, retrying in ${retry_interval}s (attempt $i/$max_retries)..."
             sleep $retry_interval
         fi
@@ -207,23 +233,26 @@ install_frr_k8s_all() {
     popd > /dev/null
     popd > /dev/null
 
+    ensure_cluster_kubeconfig "${CLUSTER1_NAME}"
+    ensure_cluster_kubeconfig "${CLUSTER2_NAME}"
+
     # Install on cluster1
     log_info "Installing FRR-K8s on ${CLUSTER1_NAME}..."
-    kubectl --context "kind-${CLUSTER1_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    kubectl_kind "${CLUSTER1_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
 
     log_info "Waiting for FRR-K8s to be ready on ${CLUSTER1_NAME}..."
-    kubectl --context "kind-${CLUSTER1_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
-    kubectl --context "kind-${CLUSTER1_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
+    kubectl_kind "${CLUSTER1_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
+    kubectl_kind "${CLUSTER1_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
 
     log_info "✓ FRR-K8s installed on ${CLUSTER1_NAME}"
 
     # Install on cluster2
     log_info "Installing FRR-K8s on ${CLUSTER2_NAME}..."
-    kubectl --context "kind-${CLUSTER2_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    kubectl_kind "${CLUSTER2_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
 
     log_info "Waiting for FRR-K8s to be ready on ${CLUSTER2_NAME}..."
-    kubectl --context "kind-${CLUSTER2_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
-    kubectl --context "kind-${CLUSTER2_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
+    kubectl_kind "${CLUSTER2_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
+    kubectl_kind "${CLUSTER2_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
 
     log_info "✓ FRR-K8s installed on ${CLUSTER2_NAME}"
 }
@@ -232,18 +261,32 @@ install_frr_k8s_all() {
 setup_broker() {
     log_info "Setting up broker on ${BROKER_CLUSTER}..."
 
-    kubectl config use-context "kind-${BROKER_CLUSTER}"
+    ensure_cluster_kubeconfig "${BROKER_CLUSTER}"
 
     # Create broker namespace
-    kubectl create namespace "${BROKER_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl_kind "${BROKER_CLUSTER}" create namespace "${BROKER_NAMESPACE}" --dry-run=client -o yaml | kubectl_kind "${BROKER_CLUSTER}" apply -f -
+
+    # Pool bounds for skynet-operator allocators (see pkg/operator/alloc/poolconfig.go)
+    kubectl_kind "${BROKER_CLUSTER}" apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: skynet-broker-pools
+  namespace: ${BROKER_NAMESPACE}
+data:
+  asnMin: "64512"
+  asnMax: "65534"
+  vtepPoolCIDR: "100.0.0.0/8"
+  vtepPrefixLen: "16"
+EOF
 
     # Apply SkyNet CRDs
     log_info "Applying SkyNet CRDs to broker..."
-    kubectl apply -f "${PROJECT_ROOT}/deploy/crds/"
+    kubectl_kind "${BROKER_CLUSTER}" apply -f "${PROJECT_ROOT}/deploy/crds/"
 
     # Wait for CRDs to be established
     log_info "Waiting for CRDs to be established..."
-    kubectl wait --for condition=established --timeout=60s \
+    kubectl_kind "${BROKER_CLUSTER}" wait --for condition=established --timeout=60s \
         crd/clusters.skynet.io \
         crd/multiclusternetworks.skynet.io \
         crd/multiclusternetworkconnects.skynet.io \
@@ -257,9 +300,9 @@ create_agent_rbac() {
     local cluster_name=$1
     log_info "Creating agent RBAC for ${cluster_name}..."
 
-    kubectl config use-context "kind-${cluster_name}"
+    ensure_cluster_kubeconfig "${cluster_name}"
 
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl_kind "${cluster_name}" apply -f -
 ---
 apiVersion: v1
 kind: Namespace
@@ -312,11 +355,10 @@ create_broker_access() {
     local cluster_name=$1
     log_info "Creating broker access for ${cluster_name}..."
 
-    # Switch to broker cluster
-    kubectl config use-context "kind-${BROKER_CLUSTER}"
+    ensure_cluster_kubeconfig "${BROKER_CLUSTER}"
 
     # Create service account for the agent on broker
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl_kind "${BROKER_CLUSTER}" apply -f -
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -351,12 +393,12 @@ EOF
 
     # Create token for the service account
     log_info "Creating token for ${cluster_name} agent..."
-    kubectl create token "skynet-agent-${cluster_name}" \
+    kubectl_kind "${BROKER_CLUSTER}" create token "skynet-agent-${cluster_name}" \
         -n "${BROKER_NAMESPACE}" \
         --duration=87600h > "${SCRIPT_DIR}/broker-token-${cluster_name}.txt"
 
-    # Get broker API server
-    BROKER_SERVER=$(kubectl config view -o jsonpath="{.clusters[?(@.name=='kind-${BROKER_CLUSTER}')].cluster.server}")
+    # API URL for kubectl from the *host* (127.0.0.1:<port> is fine). Agent pods use per-cluster URLs in deploy-agents.sh.
+    BROKER_SERVER=$(kubectl --kubeconfig "$(cluster_kubeconfig_path "${BROKER_CLUSTER}")" config view --minify -o jsonpath='{.clusters[0].cluster.server}')
     echo "${BROKER_SERVER}" > "${SCRIPT_DIR}/broker-server.txt"
 
     log_info "Broker access created for ${cluster_name}"
@@ -423,12 +465,12 @@ main() {
     log_info ""
     log_info "OVN-K clone will be cleaned up automatically"
     log_info ""
-    log_info "Files created in ${SCRIPT_DIR}:"
-    log_info "  - kubeconfig-${CLUSTER1_NAME}.yaml"
-    log_info "  - kubeconfig-${CLUSTER2_NAME}.yaml"
-    log_info "  - broker-token-${CLUSTER1_NAME}.txt"
-    log_info "  - broker-token-${CLUSTER2_NAME}.txt"
-    log_info "  - broker-server.txt"
+    log_info "Files created:"
+    log_info "  - ${PROJECT_ROOT}/output/kubeconfig-${CLUSTER1_NAME}.yaml"
+    log_info "  - ${PROJECT_ROOT}/output/kubeconfig-${CLUSTER2_NAME}.yaml"
+    log_info "  - ${SCRIPT_DIR}/broker-token-${CLUSTER1_NAME}.txt"
+    log_info "  - ${SCRIPT_DIR}/broker-token-${CLUSTER2_NAME}.txt"
+    log_info "  - ${SCRIPT_DIR}/broker-server.txt"
     log_info ""
     log_info "Next steps:"
     log_info "  1. Build and load agent image:"

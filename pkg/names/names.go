@@ -19,15 +19,15 @@ limitations under the License.
 package names
 
 const (
-	Namespace = "mcn-system"
+	Namespace = "skynet-operator"
 
-	BrokerComponent  = "mcn-broker"
-	AgentComponent   = "mcn-agent"
-	OperatorComponent = "mcn-operator"
+	BrokerComponent   = "skynet-broker"
+	AgentComponent    = "skynet-agent"
+	OperatorComponent = "skynet-operator"
 
-	BrokerServiceAccount  = "mcn-broker"
-	AgentServiceAccount   = "mcn-agent"
-	OperatorServiceAccount = "mcn-operator"
+	BrokerServiceAccount   = "skynet-broker"
+	AgentServiceAccount    = "skynet-agent"
+	OperatorServiceAccount = "skynet-operator"
 
 	// Env var names injected into the operator pod by OLM.
 	// The operator reads these to know which image to deploy for each component.
@@ -35,13 +35,13 @@ const (
 	AgentImageEnvVar  = "RELATED_IMAGE_AGENT"
 
 	// Fallback image refs used when the env vars are not set (local dev).
-	DefaultBrokerImage = "quay.io/aswinsuryan/skynet:mcn-broker-latest"
-	DefaultAgentImage  = "quay.io/aswinsuryan/skynet:mcn-agent-latest"
+	DefaultBrokerImage = "quay.io/aswinsuryan/skynet:skynet-broker-latest"
+	DefaultAgentImage  = "quay.io/aswinsuryan/skynet:skynet-agent-latest"
 
 	// Label keys applied to all resources managed by the operator.
 	AppLabel       = "app.kubernetes.io/name"
-	AppValue       = "mcn"
+	AppValue       = "skynet"
 	ComponentLabel = "app.kubernetes.io/component"
 	ManagedByLabel = "app.kubernetes.io/managed-by"
-	ManagedByValue = "mcn-operator"
+	ManagedByValue = "skynet-operator"
 )

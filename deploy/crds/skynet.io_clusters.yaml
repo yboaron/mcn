@@ -19,7 +19,7 @@ spec:
       openAPIV3Schema:
         description: |-
           Cluster represents cluster registration and endpoints in the broker.
-          Created and managed by SkyNet agent.
+          VTEP CIDR and ASN are chosen by skynet-operator (Skynet status), passed to the agent via env, then written to this CR by the agent.
         properties:
           apiVersion:
             description: |-
@@ -42,8 +42,7 @@ spec:
             properties:
               asn:
                 description: |-
-                  ASN is the allocated BGP ASN for this cluster
-                  Allocated by SkyNet agent using optimistic locking
+                  ASN is the BGP ASN for this cluster (agent allocation or Skynet status when enabled).
                 format: int32
                 maximum: 65534
                 minimum: 64512
@@ -55,8 +54,7 @@ spec:
                 type: string
               vtepCIDR:
                 description: |-
-                  VtepCIDR is the allocated VTEP CIDR for this cluster
-                  Allocated by SkyNet agent using optimistic locking
+                  VtepCIDR is the VTEP CIDR for this cluster (agent allocation or Skynet status when enabled).
                 type: string
             required:
             - asn

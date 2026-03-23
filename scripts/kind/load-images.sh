@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Loads MCN images into one or more KIND clusters.
+# Loads Skynet images into one or more KIND clusters.
 # Images must be built locally before running this script (make docker-build).
 #
 # Usage:
@@ -34,9 +34,9 @@ REPO="${REPO:-quay.io/aswinsuryan/skynet}"
 VERSION="${VERSION:-latest}"
 CLUSTERS="${CLUSTERS:-cluster1 cluster2}"
 
-OPERATOR_IMAGE="${REPO}:mcn-operator-${VERSION}"
-BROKER_IMAGE="${REPO}:mcn-broker-${VERSION}"
-AGENT_IMAGE="${REPO}:mcn-agent-${VERSION}"
+OPERATOR_IMAGE="${REPO}:skynet-operator-${VERSION}"
+BROKER_IMAGE="${REPO}:skynet-broker-${VERSION}"
+AGENT_IMAGE="${REPO}:skynet-agent-${VERSION}"
 
 IMAGES=(
     "${OPERATOR_IMAGE}"
