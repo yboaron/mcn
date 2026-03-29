@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: skynet-agent
+  namespace: skynet-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: skynet-agent
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["skynet.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["k8s.ovn.org"]
+    resources: ["vteps", "userdefinednetworks"]
+    verbs: ["*"]
+  - apiGroups: ["frrk8s.metallb.io"]
+    resources: ["frrconfigurations"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: skynet-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: skynet-agent
+subjects:
+  - kind: ServiceAccount
+    name: skynet-agent
+    namespace: skynet-operator

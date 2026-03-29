@@ -17,71 +17,40 @@ spec:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: |-
-          Skynet is the primary install resource for SkyNet on a cluster (similar to submariner.io Submariner).
-          The skynet-operator watches this CR, reconciles broker access and network identifiers, updates status,
-          and creates the skynet-agent Deployment with configuration injected as environment variables.
-          See docs/SKYNET_OPERATOR_CONTRACT.md for the agent contract.
         properties:
           apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
           spec:
             properties:
               agent:
-                description: Agent controls how the operator deploys skynet-agent (image, replicas).
                 properties:
                   image:
-                    description: Image overrides the agent container image when non-empty.
                     type: string
                   replicas:
-                    description: Replicas for the agent Deployment (typically 1).
                     format: int32
                     minimum: 1
                     type: integer
                 type: object
               asn:
-                description: |-
-                  ASN is an optional user-supplied BGP private ASN (RFC 6996 range).
-                  When zero, the operator allocates one.
                 format: int32
                 maximum: 65534
                 minimum: 64512
                 type: integer
               brokerConfig:
-                description: BrokerConfig contains the broker connection details
                 properties:
                   brokerNamespace:
-                    description: |-
-                      BrokerNamespace is the namespace on the broker cluster where SkyNet stores Cluster and related CRs.
-                      Defaults to "skynet-broker" when empty (same default as SKYNET_BROKER_NAMESPACE on the agent).
                     type: string
                   server:
-                    description: Server is the broker API server URL
                     type: string
                   tokenSecretRef:
-                    description: TokenSecretRef is the reference to the secret containing
-                      broker credentials
                     properties:
                       name:
-                        description: Name of the secret
                         type: string
                       namespace:
-                        description: Namespace of the secret
                         type: string
                     required:
                     - name
@@ -92,20 +61,13 @@ spec:
                 - tokenSecretRef
                 type: object
               clusterID:
-                description: ClusterID is the unique identifier for this cluster
                 maxLength: 63
                 minLength: 1
                 type: string
               routeReflectorCount:
                 default: 0
-                description: |-
-                  RouteReflectorCount is the number of Route Reflector nodes
-                  0 = full mesh mode, >0 = RR mode with auto-selection
                 type: integer
               vtepCIDR:
-                description: |-
-                  VtepCIDR is an optional user-supplied VTEP CIDR for this cluster (/16 within the deployment VTEP pool).
-                  When empty, the operator allocates one from the broker pool.
                 type: string
             required:
             - brokerConfig
@@ -114,60 +76,35 @@ spec:
           status:
             properties:
               agentReady:
-                description: AgentReady is true when the operator considers the skynet-agent Deployment available.
                 type: boolean
               asn:
-                description: |-
-                  Effective BGP ASN after operator allocation (mirror into agent env SKYNET_ALLOCATED_ASN).
                 format: int32
                 type: integer
               conditions:
-                description: Conditions represent the latest available observations
-                  of the Skynet state
                 items:
-                  description: Condition contains details for one aspect of the current
-                    state of this API Resource.
                   properties:
                     lastTransitionTime:
-                      description: |-
-                        lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
                       format: date-time
                       type: string
                     message:
-                      description: |-
-                        message is a human readable message indicating details about the transition.
-                        This may be an empty string.
                       maxLength: 32768
                       type: string
                     observedGeneration:
-                      description: |-
-                        observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
                       type: string
                     status:
-                      description: status of the condition, one of True, False, Unknown.
                       enum:
                       - "True"
                       - "False"
                       - Unknown
                       type: string
                     type:
-                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
@@ -180,15 +117,11 @@ spec:
                   type: object
                 type: array
               observedGeneration:
-                description: ObservedGeneration is the metadata.generation last reconciled by the operator.
                 format: int64
                 type: integer
               phase:
-                description: Phase represents the current state of the SkyNet configuration
                 type: string
               vtepCIDR:
-                description: |-
-                  Effective VTEP CIDR after operator allocation (mirror into agent env SKYNET_ALLOCATED_VTEP_CIDR).
                 type: string
             type: object
         required:
@@ -196,5 +129,3 @@ spec:
         type: object
     served: true
     storage: true
-    subresources:
-      status: {}

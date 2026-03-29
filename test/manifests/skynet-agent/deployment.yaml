@@ -1,0 +1,93 @@
+# Skynet agent Deployment — broker creds from Secret skynet-agent-broker,
+# allocation + pool bounds from ConfigMap skynet-agent-config (operator contract).
+# Create Secret + ConfigMap before apply, or use test/deploy-agents.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skynet-agent
+  namespace: skynet-operator
+  labels:
+    app: skynet-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skynet-agent
+  template:
+    metadata:
+      labels:
+        app: skynet-agent
+    spec:
+      serviceAccountName: skynet-agent
+      containers:
+        - name: agent
+          image: skynet-agent:latest
+          imagePullPolicy: Never
+          args:
+            - --v=4
+          env:
+            - name: SKYNET_CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: cluster-id
+            - name: SKYNET_BROKER_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: broker-namespace
+            - name: SKYNET_BROKER_API_SERVER
+              valueFrom:
+                secretKeyRef:
+                  name: skynet-agent-broker
+                  key: api-server
+            - name: SKYNET_BROKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: skynet-agent-broker
+                  key: token
+            - name: SKYNET_ALLOCATED_VTEP_CIDR
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: allocated-vtep-cidr
+            - name: SKYNET_ALLOCATED_ASN
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: allocated-asn
+            - name: SKYNET_POOL_ASN_MIN
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: pool-asn-min
+            - name: SKYNET_POOL_ASN_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: pool-asn-max
+            - name: SKYNET_POOL_VTEP_CIDR
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: pool-vtep-cidr
+            - name: SKYNET_POOL_VTEP_PREFIX_LEN
+              valueFrom:
+                configMapKeyRef:
+                  name: skynet-agent-config
+                  key: pool-vtep-prefix-len
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi

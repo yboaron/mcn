@@ -89,7 +89,9 @@ func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator
 			continue
 		}
 
-		// Allocate VTEP IP
+		// Allocate VTEP IP (currently single-stack IPv4 only)
+		// TODO(Phase 2): When OVN-K VTEP controller supports managed mode,
+		// read from VTEP status which may include both IPv4 and IPv6
 		vtepIP, err := vtepIPAllocator(node.Name)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to allocate VTEP IP for node %s", node.Name)
@@ -101,13 +103,13 @@ func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator
 		endpoint := skynetv1.NodeEndpoint{
 			Node:           node.Name,
 			BgpPeerIP:      bgpPeerIP,
-			VtepIP:         vtepIP,
+			VtepIPs:        []string{vtepIP}, // Array for dual-stack support (currently single IPv4)
 			RouteReflector: isRR,
 		}
 
 		endpoints = append(endpoints, endpoint)
-		klog.V(4).Infof("Collected endpoint for node %s: bgpPeerIP=%s, vtepIP=%s, isRR=%v",
-			node.Name, bgpPeerIP, vtepIP, isRR)
+		klog.V(4).Infof("Collected endpoint for node %s: bgpPeerIP=%s, vtepIPs=%v, isRR=%v",
+			node.Name, bgpPeerIP, endpoint.VtepIPs, isRR)
 	}
 
 	klog.Infof("Collected %d node endpoints", len(endpoints))

@@ -1,0 +1,8 @@
+# Optional: kubectl apply -k test/manifests/skynet-agent
+# You must still create Secret skynet-agent-broker and ConfigMap skynet-agent-config first.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - deployment.yaml

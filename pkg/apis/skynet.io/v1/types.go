@@ -218,9 +218,12 @@ type NodeEndpoint struct {
 	// +kubebuilder:validation:Required
 	BgpPeerIP string `json:"bgpPeerIP"`
 
-	// VtepIP is the VTEP IP address for this node
+	// VtepIPs are the VTEP IP addresses for this node (supports dual-stack)
+	// Maximum 2 IPs (one IPv4, one IPv6)
 	// +kubebuilder:validation:Required
-	VtepIP string `json:"vtepIP"`
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=2
+	VtepIPs []string `json:"vtepIPs"`
 
 	// RouteReflector indicates if this node is a Route Reflector
 	// +optional
