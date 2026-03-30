@@ -240,25 +240,27 @@ func (a *Agent) Start(ctx context.Context) error {
 	return nil
 }
 
-// registerCluster creates or updates the Cluster CR on the broker
+// registerCluster creates or updates the local Cluster CR (syncer will export to broker)
 func (a *Agent) registerCluster(ctx context.Context) error {
-	klog.Infof("Registering cluster %s with broker", a.clusterID)
+	klog.Infof("Registering cluster %s locally (will sync to broker)", a.clusterID)
 
-	clusterUnstructured, getErr := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
-	brokerClusterExists := false
+	// Check if local Cluster CR exists
+	localNS := "skynet-operator"
+	clusterUnstructured, getErr := a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+	localClusterExists := false
 	if getErr == nil {
-		brokerClusterExists = true
+		localClusterExists = true
 	} else if !apierrors.IsNotFound(getErr) {
-		return errors.Wrap(getErr, "get Cluster from broker")
+		return errors.Wrap(getErr, "get local Cluster CR")
 	}
 
 	var cluster *skynetv1.Cluster
-	if brokerClusterExists {
+	if localClusterExists {
 		cluster = &skynetv1.Cluster{}
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterUnstructured.Object, cluster); err != nil {
-			return errors.Wrap(err, "failed to convert existing Cluster")
+			return errors.Wrap(err, "failed to convert existing local Cluster")
 		}
-		klog.V(2).Infof("Found existing Cluster CR for %s", a.clusterID)
+		klog.V(2).Infof("Found existing local Cluster CR for %s", a.clusterID)
 	} else {
 		cluster = &skynetv1.Cluster{
 			TypeMeta: metav1.TypeMeta{
@@ -266,13 +268,14 @@ func (a *Agent) registerCluster(ctx context.Context) error {
 				Kind:       "Cluster",
 			},
 			ObjectMeta: metav1.ObjectMeta{
-				Name: a.clusterID,
+				Name:      a.clusterID,
+				Namespace: localNS,
 			},
 			Spec: skynetv1.ClusterSpec{
 				ClusterID: a.clusterID,
 			},
 		}
-		klog.V(2).Infof("Creating new Cluster CR for %s", a.clusterID)
+		klog.V(2).Infof("Creating new local Cluster CR for %s", a.clusterID)
 	}
 
 	if a.operatorVtepCIDR == "" || a.operatorASN == 0 {
@@ -298,40 +301,32 @@ func (a *Agent) registerCluster(ctx context.Context) error {
 	// Store the cluster CR
 	a.cluster = cluster
 
-	// Create or update on broker (using optimistic locking)
+	// Create or update locally (broker syncer will export to broker)
 	unstructuredCluster, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cluster)
 	if err != nil {
 		return errors.Wrap(err, "failed to convert Cluster to unstructured")
 	}
 
-	if !brokerClusterExists {
-		// Create new cluster
-		_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Create(ctx, &unstructured.Unstructured{Object: unstructuredCluster}, metav1.CreateOptions{})
+	if !localClusterExists {
+		// Create new local cluster CR
+		_, err = a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Create(ctx, &unstructured.Unstructured{Object: unstructuredCluster}, metav1.CreateOptions{})
 		if err != nil {
-			return errors.Wrap(err, "failed to create Cluster on broker")
+			return errors.Wrap(err, "failed to create local Cluster CR")
 		}
-		klog.Infof("Successfully created Cluster CR on broker for %s", a.clusterID)
+		klog.Infof("Successfully created local Cluster CR for %s (will sync to broker)", a.clusterID)
 	} else {
-		// Update existing cluster
+		// Update existing local cluster CR
 		clusterUnstructured.Object = unstructuredCluster
-		_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
+		_, err = a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
 		if err != nil {
-			return errors.Wrap(err, "failed to update Cluster on broker")
+			return errors.Wrap(err, "failed to update local Cluster CR")
 		}
-		klog.Infof("Successfully updated Cluster CR on broker for %s", a.clusterID)
+		klog.Infof("Successfully updated local Cluster CR for %s", a.clusterID)
 	}
 
-	// Also create locally for syncer to pick up
-	localUnstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cluster)
-	if err != nil {
-		return errors.Wrap(err, "failed to convert Cluster to unstructured for local")
-	}
-
-	_, err = a.localClient.Resource(skynetv1.ClusterGVR).Namespace(metav1.NamespaceDefault).Create(ctx, &unstructured.Unstructured{Object: localUnstructured}, metav1.CreateOptions{})
-	if err != nil {
-		// Ignore already exists errors
-		klog.V(2).Infof("Local Cluster CR may already exist: %v", err)
-	}
+	// Note: The broker syncer handles bidirectional sync:
+	// - Local Cluster CR (skynet-operator) → Broker (skynet-broker)
+	// - Remote Cluster CRs: Broker (skynet-broker) → Local (skynet-operator)
 
 	return nil
 }
@@ -358,8 +353,9 @@ func (a *Agent) reconcileLoop(ctx context.Context) {
 func (a *Agent) reconcile(ctx context.Context) error {
 	klog.V(4).Info("Reconciling cluster state")
 
-	// Collect node endpoints
-	endpoints, err := a.endpointReporter.CollectEndpoints(ctx, a.vtepManager.AllocateVtepIP)
+	// Collect node endpoints (Phase 1: BGP peer IPs only)
+	// Phase 2: Will include VTEP IPs from VTEP CR status when OVN-K controller is available
+	endpoints, err := a.endpointReporter.CollectEndpoints(ctx)
 	if err != nil {
 		return errors.Wrap(err, "failed to collect node endpoints")
 	}
@@ -371,11 +367,11 @@ func (a *Agent) reconcile(ctx context.Context) error {
 		klog.Warningf("Failed to update cluster status (will retry): %v", err)
 	}
 
-	// Get remote clusters from broker
-	// Remote cluster endpoint info is used directly for BGP configuration
-	remoteClusters, err := a.brokerSyncer.GetRemoteClusters(ctx)
+	// Get remote clusters from local synced copies (skynet-operator namespace)
+	// The broker syncer imports remote Cluster CRs from broker to local
+	remoteClusters, err := a.getRemoteClustersFromLocal(ctx)
 	if err != nil {
-		return errors.Wrap(err, "failed to get remote clusters")
+		return errors.Wrap(err, "failed to get remote clusters from local")
 	}
 
 	// Get MultiClusterNetworks from local cache
@@ -393,17 +389,19 @@ func (a *Agent) reconcile(ctx context.Context) error {
 	return nil
 }
 
-// updateClusterStatus updates the Cluster CR status with node endpoints
+// updateClusterStatus updates the local Cluster CR status with node endpoints
 // Uses retry logic to handle concurrent updates from heartbeat
+// The broker syncer will sync the updated status to the broker
 func (a *Agent) updateClusterStatus(ctx context.Context, endpoints []skynetv1.NodeEndpoint) error {
 	maxRetries := 3
 	backoff := time.Second
+	localNS := "skynet-operator"
 
 	for i := 0; i < maxRetries; i++ {
-		// Get latest cluster from broker
-		clusterUnstructured, err := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+		// Get latest cluster from local
+		clusterUnstructured, err := a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Get(ctx, a.clusterID, metav1.GetOptions{})
 		if err != nil {
-			return errors.Wrap(err, "failed to get Cluster from broker")
+			return errors.Wrap(err, "failed to get local Cluster CR")
 		}
 
 		cluster := &skynetv1.Cluster{}
@@ -421,9 +419,9 @@ func (a *Agent) updateClusterStatus(ctx context.Context, endpoints []skynetv1.No
 		}
 
 		clusterUnstructured.Object = unstructuredCluster
-		_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
+		_, err = a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
 		if err == nil {
-			klog.V(4).Infof("Updated Cluster status with %d endpoints", len(endpoints))
+			klog.V(4).Infof("Updated local Cluster status with %d endpoints", len(endpoints))
 			return nil
 		}
 
@@ -461,16 +459,19 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-// updateHeartbeat updates the LastHeartbeat timestamp on the Cluster CR
+// updateHeartbeat updates the LastHeartbeat timestamp on the local Cluster CR
+// The broker syncer will sync the updated status to the broker
 func (a *Agent) updateHeartbeat(ctx context.Context) error {
 	if a.cluster == nil {
 		return errors.New("cluster CR not initialized")
 	}
 
-	// Get latest cluster from broker
-	clusterUnstructured, err := a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+	localNS := "skynet-operator"
+
+	// Get latest cluster from local
+	clusterUnstructured, err := a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Get(ctx, a.clusterID, metav1.GetOptions{})
 	if err != nil {
-		return errors.Wrap(err, "failed to get Cluster from broker")
+		return errors.Wrap(err, "failed to get local Cluster CR")
 	}
 
 	cluster := &skynetv1.Cluster{}
@@ -491,12 +492,12 @@ func (a *Agent) updateHeartbeat(ctx context.Context) error {
 	}
 
 	clusterUnstructured.Object = unstructuredCluster
-	_, err = a.brokerClient.Resource(skynetv1.ClusterGVR).Namespace(a.brokerNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
+	_, err = a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Update(ctx, clusterUnstructured, metav1.UpdateOptions{})
 	if err != nil {
-		return errors.Wrap(err, "failed to update heartbeat")
+		return errors.Wrap(err, "failed to update local heartbeat")
 	}
 
-	klog.V(4).Infof("Updated heartbeat for cluster %s", a.clusterID)
+	klog.V(4).Infof("Updated local heartbeat for cluster %s", a.clusterID)
 	return nil
 }
 
@@ -506,6 +507,36 @@ func (a *Agent) Stop() {
 	if a.brokerSyncer != nil {
 		a.brokerSyncer.Stop()
 	}
+}
+
+// getRemoteClustersFromLocal retrieves remote Cluster CRs from local synced copies
+// These are synced from the broker by the broker syncer to skynet-operator namespace
+func (a *Agent) getRemoteClustersFromLocal(ctx context.Context) ([]*skynetv1.Cluster, error) {
+	localNS := "skynet-operator"
+
+	clusterList, err := a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list local Cluster CRs")
+	}
+
+	var remoteClusters []*skynetv1.Cluster
+	for i := range clusterList.Items {
+		cluster := &skynetv1.Cluster{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterList.Items[i].Object, cluster); err != nil {
+			klog.Errorf("Failed to convert Cluster: %v", err)
+			continue
+		}
+
+		// Skip local cluster (only return remote clusters)
+		if cluster.Spec.ClusterID == a.clusterID {
+			continue
+		}
+
+		remoteClusters = append(remoteClusters, cluster)
+	}
+
+	klog.V(4).Infof("Found %d remote clusters in local sync", len(remoteClusters))
+	return remoteClusters, nil
 }
 
 // GetCluster returns the current Cluster CR

@@ -220,10 +220,11 @@ type NodeEndpoint struct {
 
 	// VtepIPs are the VTEP IP addresses for this node (supports dual-stack)
 	// Maximum 2 IPs (one IPv4, one IPv6)
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinItems=1
+	// TODO(Phase 2): Populate from VTEP CR status when OVN-K VTEP controller is available
+	// See: https://github.com/ovn-kubernetes/ovn-kubernetes/pull/6078
+	// +optional
 	// +kubebuilder:validation:MaxItems=2
-	VtepIPs []string `json:"vtepIPs"`
+	VtepIPs []string `json:"vtepIPs,omitempty"`
 
 	// RouteReflector indicates if this node is a Route Reflector
 	// +optional

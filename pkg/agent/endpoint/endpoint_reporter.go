@@ -62,7 +62,10 @@ func NewEndpointReporter(config *Config) (*EndpointReporter, error) {
 }
 
 // CollectEndpoints collects node endpoint information from the cluster
-func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator func(string) (string, error)) ([]skynetv1.NodeEndpoint, error) {
+// Phase 1: Only collects BGP peer IPs (node internal IPs)
+// Phase 2: Will read VTEP IPs from VTEP CR status when OVN-K VTEP controller is available
+// See: https://github.com/ovn-kubernetes/ovn-kubernetes/pull/6078
+func (r *EndpointReporter) CollectEndpoints(ctx context.Context) ([]skynetv1.NodeEndpoint, error) {
 	klog.V(2).Info("Collecting node endpoints")
 
 	// List all nodes
@@ -89,27 +92,19 @@ func (r *EndpointReporter) CollectEndpoints(ctx context.Context, vtepIPAllocator
 			continue
 		}
 
-		// Allocate VTEP IP (currently single-stack IPv4 only)
-		// TODO(Phase 2): When OVN-K VTEP controller supports managed mode,
-		// read from VTEP status which may include both IPv4 and IPv6
-		vtepIP, err := vtepIPAllocator(node.Name)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to allocate VTEP IP for node %s", node.Name)
-		}
-
 		// Check if node is a route reflector
 		isRR := r.isRouteReflector(node)
 
 		endpoint := skynetv1.NodeEndpoint{
 			Node:           node.Name,
 			BgpPeerIP:      bgpPeerIP,
-			VtepIPs:        []string{vtepIP}, // Array for dual-stack support (currently single IPv4)
+			// VtepIPs: Will be populated in Phase 2 from VTEP CR status
 			RouteReflector: isRR,
 		}
 
 		endpoints = append(endpoints, endpoint)
-		klog.V(4).Infof("Collected endpoint for node %s: bgpPeerIP=%s, vtepIPs=%v, isRR=%v",
-			node.Name, bgpPeerIP, endpoint.VtepIPs, isRR)
+		klog.V(4).Infof("Collected endpoint for node %s: bgpPeerIP=%s, isRR=%v",
+			node.Name, bgpPeerIP, isRR)
 	}
 
 	klog.Infof("Collected %d node endpoints", len(endpoints))

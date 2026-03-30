@@ -119,12 +119,13 @@ func (s *BrokerSyncer) initClusterSyncer() error {
 	klog.V(2).Info("Initializing Cluster syncer")
 
 	// Create broker syncer for Cluster resources
-	// Direction: Local -> Broker (push only)
-	// Following Submariner Lighthouse pattern
+	// Direction: Bidirectional (local ↔ broker)
+	// - Export: Local Cluster CR (skynet-operator) → Broker (skynet-broker)
+	// - Import: Remote Cluster CRs from Broker → Local (skynet-operator)
 	syncer, err := broker.NewSyncer(broker.SyncerConfig{
 		LocalRestConfig:  s.localConfig,
 		LocalClient:      s.localClient,
-		LocalNamespace:   metav1.NamespaceAll,
+		LocalNamespace:   "skynet-operator", // Only sync from/to skynet-operator namespace
 		LocalClusterID:   s.clusterID,
 		RestMapper:       s.restMapper,
 		BrokerRestConfig: s.brokerConfig,
@@ -132,10 +133,10 @@ func (s *BrokerSyncer) initClusterSyncer() error {
 		BrokerNamespace:  s.brokerNS,
 		ResourceConfigs: []broker.ResourceConfig{
 			{
-				LocalSourceNamespace: metav1.NamespaceAll,
+				LocalSourceNamespace: "skynet-operator",
 				LocalResourceType:    &skynetv1.Cluster{},
 				BrokerResourceType:   &skynetv1.Cluster{},
-				// Simple passthrough - no transformation needed for Cluster CRs
+				// Bidirectional sync enabled (default behavior)
 			},
 		},
 		Scheme: s.scheme,
@@ -153,12 +154,13 @@ func (s *BrokerSyncer) initMultiClusterNetworkSyncer() error {
 	klog.V(2).Info("Initializing MultiClusterNetwork syncer")
 
 	// Create broker syncer for MultiClusterNetwork resources
-	// Direction: Broker -> Local (pull only)
-	// Following Submariner Lighthouse pattern
+	// Direction: Broker → Local (import for visibility)
+	// Import MultiClusterNetwork CRs from broker to local cluster
+	// (bidirectional by default, but we don't create MCNs locally - only on broker)
 	syncer, err := broker.NewSyncer(broker.SyncerConfig{
 		LocalRestConfig:  s.localConfig,
 		LocalClient:      s.localClient,
-		LocalNamespace:   metav1.NamespaceAll,
+		LocalNamespace:   "skynet-operator", // Sync to skynet-operator namespace
 		LocalClusterID:   s.clusterID,
 		RestMapper:       s.restMapper,
 		BrokerRestConfig: s.brokerConfig,
@@ -166,10 +168,10 @@ func (s *BrokerSyncer) initMultiClusterNetworkSyncer() error {
 		BrokerNamespace:  s.brokerNS,
 		ResourceConfigs: []broker.ResourceConfig{
 			{
-				LocalSourceNamespace: metav1.NamespaceAll,
+				LocalSourceNamespace: "skynet-operator",
 				LocalResourceType:    &skynetv1.MultiClusterNetwork{},
 				BrokerResourceType:   &skynetv1.MultiClusterNetwork{},
-				// No transform needed, just sync as-is from broker to local
+				// Bidirectional sync (but we only create MCNs on broker)
 			},
 		},
 		Scheme: s.scheme,

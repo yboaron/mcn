@@ -49,6 +49,9 @@ deploy:
 	$(MAKE) build-agent
 	$(MAKE) deploy-agents
 	@echo ""
+	@echo "Applying FRR-K8s BGP listening port workaround..."
+	cd test && ./workaround-frr-bgp.sh
+	@echo ""
 	@echo "✓ deploy complete. Next: make verify-bgp"
 
 .PHONY: verify-bgp

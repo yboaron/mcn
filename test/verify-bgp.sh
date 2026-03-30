@@ -275,7 +275,7 @@ if [[ $check_failed -eq 0 ]]; then
     echo "1. Check BGP sessions in FRR (see commands above)"
     echo "2. Verify EVPN routes: kubectl exec <frr-pod> -- vtysh -c 'show bgp l2vpn evpn'"
     echo "3. Once BGP is working, proceed with CUDN stretching tests"
-    exit 0
+    echo ""
 else
     log_error "Some checks failed. Review the output above."
     echo ""
@@ -283,5 +283,7 @@ else
     echo "1. Check agent logs: kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${AGENT_NS} logs -l app=skynet-agent"
     echo "2. Check broker resources: kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n ${BROKER_NS} get clusters -o yaml"
     echo "3. Restart agents if needed: kubectl rollout restart deployment/skynet-agent -n ${AGENT_NS}"
-    exit 1
+    echo ""
+    # Set exit code without terminating the shell (for interactive use)
+    (exit 1)
 fi

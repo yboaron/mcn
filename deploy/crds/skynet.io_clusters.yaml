@@ -17,25 +17,46 @@ spec:
   - name: v1
     schema:
       openAPIV3Schema:
+        description: |-
+          Cluster represents cluster registration and endpoints in the broker.
+          Created and managed by SkyNet agent.
         properties:
           apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
           spec:
             properties:
               asn:
+                description: |-
+                  ASN is the BGP ASN for this cluster on the broker.
+                  Set by the skynet-operator (Skynet status → agent env); the agent registers this value on the broker Cluster CR.
                 format: int32
                 maximum: 65534
                 minimum: 64512
                 type: integer
               clusterID:
+                description: ClusterID is the unique identifier for this cluster
                 maxLength: 63
                 minLength: 1
                 type: string
               vtepCIDR:
+                description: |-
+                  VtepCIDR is the VTEP CIDR for this cluster on the broker.
+                  Set by the skynet-operator (Skynet status → agent env); the agent registers this value on the broker Cluster CR.
                 type: string
             required:
             - asn
@@ -45,30 +66,40 @@ spec:
           status:
             properties:
               endpoints:
+                description: Endpoints is the list of node endpoints in this cluster
                 items:
                   properties:
                     bgpPeerIP:
+                      description: BgpPeerIP is the IP address used for BGP peering
                       type: string
                     node:
+                      description: Node is the node name
                       type: string
                     routeReflector:
+                      description: RouteReflector indicates if this node is a Route
+                        Reflector
                       type: boolean
                     vtepIPs:
+                      description: |-
+                        VtepIPs are the VTEP IP addresses for this node (supports dual-stack)
+                        Maximum 2 IPs (one IPv4, one IPv6)
+                        See: https://github.com/ovn-kubernetes/ovn-kubernetes/pull/6078
                       items:
                         type: string
                       maxItems: 2
-                      minItems: 1
                       type: array
                   required:
                   - bgpPeerIP
                   - node
-                  - vtepIPs
                   type: object
                 type: array
               lastHeartbeat:
+                description: LastHeartbeat is the timestamp of the last update from
+                  the cluster
                 format: date-time
                 type: string
               phase:
+                description: Phase represents the current state of the cluster
                 type: string
             type: object
         required:

@@ -21,6 +21,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Kubeconfig paths (same as setup-clusters-v2.sh)
+CLUSTER1_KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster1.yaml"
+CLUSTER2_KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster2.yaml"
 
 # Colors
 GREEN='\033[0;32m'
@@ -42,24 +47,24 @@ log_error() {
 
 # Patch FRR startup ConfigMap to enable BGP on external interfaces
 patch_frr_startup() {
-    local context=$1
+    local kubeconfig=$1
     local cluster=$2
 
     log_info "Patching FRR startup ConfigMap on ${cluster}..."
 
     # Get current ConfigMap
-    kubectl --context "$context" get configmap -n frr-k8s-system frr-k8s-frr-startup -o yaml > /tmp/frr-startup-${cluster}.yaml
+    kubectl --kubeconfig "$kubeconfig" get configmap -n frr-k8s-system frr-k8s-frr-startup -o yaml > /tmp/frr-startup-${cluster}.yaml
 
     # Patch bgpd_options to listen on 0.0.0.0 instead of 127.0.0.1
     sed -i 's/bgpd_options="   -A 127.0.0.1 -p 0 --limit-fds 100000"/bgpd_options="   -A 0.0.0.0 -p 179 --limit-fds 100000"/' \
         /tmp/frr-startup-${cluster}.yaml
 
     # Apply patched ConfigMap
-    kubectl --context "$context" apply -f /tmp/frr-startup-${cluster}.yaml
+    kubectl --kubeconfig "$kubeconfig" apply -f /tmp/frr-startup-${cluster}.yaml
 
     # Restart FRR pods to apply changes
     log_info "Restarting FRR pods on ${cluster}..."
-    kubectl --context "$context" rollout restart daemonset/frr-k8s-daemon -n frr-k8s-system
+    kubectl --kubeconfig "$kubeconfig" rollout restart daemonset/frr-k8s-daemon -n frr-k8s-system
 
     log_info "✓ ${cluster} FRR ConfigMap patched"
 }
@@ -76,13 +81,13 @@ main() {
     echo ""
 
     # Patch both clusters
-    patch_frr_startup "kind-cluster1" "cluster1"
-    patch_frr_startup "kind-cluster2" "cluster2"
+    patch_frr_startup "${CLUSTER1_KUBECONFIG}" "cluster1"
+    patch_frr_startup "${CLUSTER2_KUBECONFIG}" "cluster2"
 
     echo ""
     log_info "Waiting for FRR pods to be ready..."
-    kubectl --context kind-cluster1 rollout status daemonset/frr-k8s-daemon -n frr-k8s-system --timeout=120s
-    kubectl --context kind-cluster2 rollout status daemonset/frr-k8s-daemon -n frr-k8s-system --timeout=120s
+    kubectl --kubeconfig "${CLUSTER1_KUBECONFIG}" rollout status daemonset/frr-k8s-daemon -n frr-k8s-system --timeout=120s
+    kubectl --kubeconfig "${CLUSTER2_KUBECONFIG}" rollout status daemonset/frr-k8s-daemon -n frr-k8s-system --timeout=120s
 
     echo ""
     log_info "✓ Workaround applied successfully"
