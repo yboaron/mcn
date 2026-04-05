@@ -45,7 +45,8 @@ broker_api_url_for_cluster() {
     if [[ "${raw}" =~ https://127\.0\.0\.1:([0-9]+) ]]; then
         local port="${BASH_REMATCH[1]}"
         local broker_cp_ip
-        broker_cp_ip=$(docker inspect "${BROKER_CLUSTER}-control-plane" -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null | head -n1)
+        # Get IP from the "kind" network specifically (avoid concatenating multiple network IPs)
+        broker_cp_ip=$(docker inspect "${BROKER_CLUSTER}-control-plane" -f '{{.NetworkSettings.Networks.kind.IPAddress}}' 2>/dev/null)
         # Pods on other kind clusters share the Docker "kind" network; apiserver listens on :6443 on the CP node.
         if [[ -n "${broker_cp_ip}" ]]; then
             echo "https://${broker_cp_ip}:${BROKER_API_PORT:-6443}"

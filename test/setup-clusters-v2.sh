@@ -23,9 +23,11 @@ BROKER_CLUSTER="${CLUSTER1_NAME}"
 BROKER_NAMESPACE="skynet-broker"
 NUM_WORKERS="${NUM_WORKERS:-2}"
 
-# OVN-K Configuration (like Shipyard)
-OVNK_REPO="${OVNK_REPO:-https://github.com/ovn-org/ovn-kubernetes.git}"
-OVNK_BRANCH="${OVNK_BRANCH:-master}"  # or specific tag like "v0.4.0"
+# OVN-K Configuration with EVPN+FRR-K8s support
+# Using jcaamano's branch with EVPN API and FRR-K8s integration
+# See: https://github.com/ovn-org/ovn-kubernetes/pull/6127
+OVNK_REPO="${OVNK_REPO:-https://github.com/jcaamano/ovn-kubernetes.git}"
+OVNK_BRANCH="${OVNK_BRANCH:-evpn-frr-k8s-api}"
 OVNK_CLONE_DIR="/tmp/ovn-kubernetes-skynet-$$"
 
 log_info() {
@@ -125,7 +127,10 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER1_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
-          "$KIND_SH" -wk "$NUM_WORKERS" -ic
+          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae
+        # -ic: Install OVN-K from source
+        # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
+        # -rae: Route advertisements enable (auto-installs FRR-K8s with EVPN)
         popd > /dev/null
 
         # Export kubeconfig
@@ -142,7 +147,10 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER2_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
-          "$KIND_SH" -wk "$NUM_WORKERS" -ic
+          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae
+        # -ic: Install OVN-K from source
+        # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
+        # -rae: Route advertisements enable (auto-installs FRR-K8s with EVPN)
         popd > /dev/null
 
         # Export kubeconfig
@@ -150,7 +158,7 @@ create_clusters() {
         log_info "✓ Cluster ${CLUSTER2_NAME} created"
     fi
 
-    log_info "KIND clusters with OVN-Kubernetes created successfully"
+    log_info "KIND clusters with OVN-Kubernetes + FRR-K8s created successfully"
 }
 
 # Kubeconfig for a kind cluster (stored in output/ at project root).
@@ -209,52 +217,25 @@ verify_vtep_crd() {
     return 1
 }
 
-# Install FRR-K8s for BGP support
-install_frr_k8s_all() {
-    log_info "Installing FRR-K8s on both clusters..."
-
-    FRR_K8S_VERSION="${FRR_K8S_VERSION:-v0.0.21}"
-
-    # Create temp directory
-    FRR_TMP_DIR=$(mktemp -d)
-    trap 'rm -rf $FRR_TMP_DIR' EXIT
-
-    log_info "Cloning FRR-k8s repository (${FRR_K8S_VERSION})..."
-    pushd "$FRR_TMP_DIR" > /dev/null
-    git clone --depth 1 --branch $FRR_K8S_VERSION https://github.com/metallb/frr-k8s
-
-    # Download and apply OVN-K patches
-    log_info "Downloading and applying OVN-K patches..."
-    curl -Ls https://github.com/jcaamano/frr-k8s/archive/refs/heads/ovnk-bgp-v0.0.21.tar.gz | \
-        tar xzvf - frr-k8s-ovnk-bgp-v0.0.21/patches --strip-components 1
-
-    pushd frr-k8s > /dev/null
-    git apply ../patches/* || log_warn "Failed to apply some patches (may be expected)"
-    popd > /dev/null
-    popd > /dev/null
+# Cleanup OVN-K's default FRRConfiguration
+# The -rae flag auto-installs FRR-K8s but also creates a default FRRConfiguration
+# that conflicts with SkyNet's per-cluster ASN architecture
+cleanup_ovnk_frr_config() {
+    log_info "Cleaning up OVN-K's default FRRConfiguration..."
 
     ensure_cluster_kubeconfig "${CLUSTER1_NAME}"
     ensure_cluster_kubeconfig "${CLUSTER2_NAME}"
 
-    # Install on cluster1
-    log_info "Installing FRR-K8s on ${CLUSTER1_NAME}..."
-    kubectl_kind "${CLUSTER1_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
+    # Delete OVN-K's route advertisement FRRConfiguration on cluster1
+    log_info "Removing OVN-K FRRConfiguration on ${CLUSTER1_NAME}..."
+    kubectl_kind "${CLUSTER1_NAME}" delete frrconfiguration -n frr-k8s-system --all --ignore-not-found=true
 
-    log_info "Waiting for FRR-K8s to be ready on ${CLUSTER1_NAME}..."
-    kubectl_kind "${CLUSTER1_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
-    kubectl_kind "${CLUSTER1_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
+    # Delete OVN-K's route advertisement FRRConfiguration on cluster2
+    log_info "Removing OVN-K FRRConfiguration on ${CLUSTER2_NAME}..."
+    kubectl_kind "${CLUSTER2_NAME}" delete frrconfiguration -n frr-k8s-system --all --ignore-not-found=true
 
-    log_info "✓ FRR-K8s installed on ${CLUSTER1_NAME}"
-
-    # Install on cluster2
-    log_info "Installing FRR-K8s on ${CLUSTER2_NAME}..."
-    kubectl_kind "${CLUSTER2_NAME}" apply -f "${FRR_TMP_DIR}/frr-k8s/config/all-in-one/frr-k8s.yaml"
-
-    log_info "Waiting for FRR-K8s to be ready on ${CLUSTER2_NAME}..."
-    kubectl_kind "${CLUSTER2_NAME}" wait -n frr-k8s-system deployment frr-k8s-statuscleaner --for condition=Available --timeout=3m 2>/dev/null || log_warn "FRR-K8s deployment not ready yet (may need manual check)"
-    kubectl_kind "${CLUSTER2_NAME}" rollout status -n frr-k8s-system daemonset frr-k8s-daemon --timeout=3m 2>/dev/null || log_warn "FRR-K8s daemonset not ready yet (may need manual check)"
-
-    log_info "✓ FRR-K8s installed on ${CLUSTER2_NAME}"
+    log_info "✓ OVN-K FRRConfiguration cleanup complete"
+    log_info "  SkyNet agent will create its own FRRConfiguration with proper ASN"
 }
 
 # Setup broker cluster
@@ -433,10 +414,11 @@ main() {
     create_clusters
     verify_vtep_crd
 
-    # Install FRR-K8s on both clusters
+    # Cleanup OVN-K's default FRR configuration
+    # The -rae flag already installed FRR-K8s, we just need to clean up its default config
     log_info ""
-    log_info "=== Installing FRR-K8s ==="
-    install_frr_k8s_all
+    log_info "=== Cleaning up OVN-K FRRConfiguration ==="
+    cleanup_ovnk_frr_config
 
     # Wait for clusters to stabilize
     log_info "Waiting 30 seconds for clusters to stabilize..."
@@ -457,8 +439,9 @@ main() {
     log_info ""
     log_info "Clusters created with:"
     log_info "  ✓ OVN-Kubernetes CNI (built from ${OVNK_BRANCH})"
+    log_info "  ✓ Multi-network support enabled (CUDN/UserDefinedNetwork)"
+    log_info "  ✓ FRR-K8s with EVPN API support (auto-installed by -rae flag)"
     log_info "  ✓ VTEP CRD support verified"
-    log_info "  ✓ FRR-K8s for BGP support"
     log_info "  ✓ SkyNet CRDs on broker"
     log_info "  ✓ RBAC configured for agents"
     log_info "  ✓ Broker tokens created"
