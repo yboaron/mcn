@@ -108,6 +108,36 @@ patch_kind_for_ubuntu() {
     fi
 }
 
+# TEMPORARY WORKAROUND: Patch OVN-K scripts to tolerate IPv6 errors
+#
+# ISSUE: OVN-K's kind.sh runs in IPv4-only mode (PLATFORM_IPV6_SUPPORT=false by default)
+#        but still tries to delete IPv6 routes with "ip -6 route delete default".
+#        This fails on systems where Docker doesn't support IPv6 in container namespaces,
+#        causing deployment to abort due to "set -e".
+#
+# ROOT CAUSE: OVN-K assumes IPv6 routing table exists even when IPv6 support is disabled.
+#
+# PROPER FIX: OVN-K should check if IPv6 routing table exists before manipulating it:
+#             if docker exec frr ip -6 route show default &>/dev/null; then
+#                 docker exec frr ip -6 route delete default
+#             fi
+#
+# UPSTREAM: This should be fixed in ovn-kubernetes/ovn-kubernetes (jcaamano's evpn-frr-k8s-api branch)
+#           Until then, we make IPv6 operations non-fatal with "|| true".
+#
+# IMPACT: Safe workaround - SkyNet Phase 1 only uses IPv4 for BGP peering.
+#         Future dual-stack support can use -i6 flag: "$KIND_SH ... -i6"
+#
+patch_ipv6_tolerance() {
+    log_info "Patching OVN-K scripts for IPv6 error tolerance..."
+
+    # Make all IPv6 route operations non-fatal
+    find "$OVNK_CLONE_DIR/contrib" -type f -name "*.sh" -exec \
+        sed -i.bak 's/ip -6 route delete/ip -6 route delete || true/g' {} \;
+
+    log_info "✓ Patched for IPv6 tolerance (systems without Docker IPv6 will continue)"
+}
+
 # Create KIND clusters using OVN-K kind.sh
 create_clusters() {
     log_info "Creating KIND clusters with OVN-Kubernetes..."
@@ -117,6 +147,9 @@ create_clusters() {
 
     # Patch to use ubuntu-image
     patch_kind_for_ubuntu
+
+    # Patch to tolerate IPv6 errors (for systems without Docker IPv6)
+    patch_ipv6_tolerance
 
     # Create cluster1
     if kind get clusters 2>/dev/null | grep -q "^${CLUSTER1_NAME}$"; then
