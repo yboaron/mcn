@@ -49,4 +49,12 @@ rm -rf "${PROJECT_ROOT}/output"
 log_info "Removing docker image..."
 docker rmi skynet-agent:latest 2>/dev/null || log_warn "Image skynet-agent:latest not found"
 
+# Clean up OVN-K test containers (frr, bgpserver)
+log_info "Removing OVN-K test containers..."
+docker rm -f frr bgpserver 2>/dev/null || log_warn "OVN-K test containers not found"
+
+# Clean up Docker networks (kind, underlay, bgpnet)
+log_info "Removing Docker networks..."
+docker network rm kind underlay bgpnet 2>/dev/null || log_warn "Some networks not found"
+
 log_info "=== Cleanup complete ==="

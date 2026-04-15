@@ -138,6 +138,28 @@ patch_ipv6_tolerance() {
     log_info "✓ Patched for IPv6 tolerance (systems without Docker IPv6 will continue)"
 }
 
+# WORKAROUND: Increase multus pod wait timeout
+#
+# ISSUE: Multus DaemonSet pods take longer than OVN-K's default timeout (51-55s) to become Ready
+#        in KIND environments with OVN-K multi-network mode enabled (-mne flag).
+#        Pods eventually become Ready after 5-6 restarts (~5 minutes) but script exits on timeout.
+#
+# ROOT CAUSE: Multus initialization is slow in containerized KIND nodes with OVN-K CNI.
+#
+# WORKAROUND: Increase kubectl wait timeout for kube-system pods from 51s to 300s.
+#
+# IMPACT: Deployment takes longer but succeeds reliably. Multus is critical for CUDN support.
+#
+patch_multus_timeout() {
+    log_info "Patching OVN-K scripts to increase multus pod wait timeout..."
+
+    # Increase timeout for kube-system pod wait (includes multus) from ${timeout}s to 300s
+    sed -i.bak 's/kubectl wait -n kube-system --for=condition=ready pods --all --timeout=${timeout}s/kubectl wait -n kube-system --for=condition=ready pods --all --timeout=300s/g' \
+        "$OVNK_CLONE_DIR/contrib/kind-common.sh"
+
+    log_info "✓ Patched multus wait timeout to 300s (was ~51s)"
+}
+
 # Create KIND clusters using OVN-K kind.sh
 create_clusters() {
     log_info "Creating KIND clusters with OVN-Kubernetes..."
@@ -150,6 +172,9 @@ create_clusters() {
 
     # Patch to tolerate IPv6 errors (for systems without Docker IPv6)
     patch_ipv6_tolerance
+
+    # Patch to increase multus pod wait timeout
+    patch_multus_timeout
 
     # Create cluster1
     if kind get clusters 2>/dev/null | grep -q "^${CLUSTER1_NAME}$"; then

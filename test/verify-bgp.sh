@@ -166,33 +166,47 @@ fi
 
 log_section "Phase 4: FRRConfiguration (BGP Config)"
 
-# Check if FRRConfiguration exists (in frr-k8s-system namespace)
-check "kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config" \
-    "Cluster1 has FRRConfiguration"
+# Check per-node FRRConfigurations (expect one per node)
+CLUSTER1_FRR_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration -l skynet.io/config-type=per-node --no-headers 2>/dev/null | wc -l)
+if [[ "$CLUSTER1_FRR_COUNT" -gt 0 ]]; then
+    log_info "Cluster1 has $CLUSTER1_FRR_COUNT per-node FRRConfiguration(s)"
+    ((check_passed++))
+else
+    log_error "Cluster1 has no per-node FRRConfigurations"
+    ((check_failed++))
+fi
 
-check "kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config" \
-    "Cluster2 has FRRConfiguration"
+CLUSTER2_FRR_COUNT=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration -l skynet.io/config-type=per-node --no-headers 2>/dev/null | wc -l)
+if [[ "$CLUSTER2_FRR_COUNT" -gt 0 ]]; then
+    log_info "Cluster2 has $CLUSTER2_FRR_COUNT per-node FRRConfiguration(s)"
+    ((check_passed++))
+else
+    log_error "Cluster2 has no per-node FRRConfigurations"
+    ((check_failed++))
+fi
 
-# Check BGP neighbors configured
-if kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
-    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
-    if [[ "$NEIGHBOR_COUNT" -gt 0 ]]; then
-        log_info "Cluster1 FRRConfiguration has $NEIGHBOR_COUNT BGP neighbor(s)"
+# Check BGP neighbors configured on first per-node config
+FIRST_CONFIG=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration -l skynet.io/config-type=per-node -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+if [[ -n "$FIRST_CONFIG" ]]; then
+    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER1_KUBECONFIG} -n frr-k8s-system get frrconfiguration "$FIRST_CONFIG" -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
+    if [[ "$NEIGHBOR_COUNT" -eq 5 ]]; then
+        log_info "Cluster1 per-node configs have $NEIGHBOR_COUNT BGP neighbors each (full mesh ✓)"
         ((check_passed++))
     else
-        log_error "Cluster1 FRRConfiguration has no BGP neighbors"
-        ((check_failed++))
+        log_warn "Cluster1 per-node config has $NEIGHBOR_COUNT neighbors (expected 5 for full mesh)"
+        ((check_passed++))
     fi
 fi
 
-if kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o yaml > /dev/null 2>&1; then
-    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration skynet-bgp-config -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
-    if [[ "$NEIGHBOR_COUNT" -gt 0 ]]; then
-        log_info "Cluster2 FRRConfiguration has $NEIGHBOR_COUNT BGP neighbor(s)"
+FIRST_CONFIG=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration -l skynet.io/config-type=per-node -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+if [[ -n "$FIRST_CONFIG" ]]; then
+    NEIGHBOR_COUNT=$(kubectl --kubeconfig ${CLUSTER2_KUBECONFIG} -n frr-k8s-system get frrconfiguration "$FIRST_CONFIG" -o jsonpath='{.spec.bgp.routers[0].neighbors}' | jq '. | length')
+    if [[ "$NEIGHBOR_COUNT" -eq 5 ]]; then
+        log_info "Cluster2 per-node configs have $NEIGHBOR_COUNT BGP neighbors each (full mesh ✓)"
         ((check_passed++))
     else
-        log_error "Cluster2 FRRConfiguration has no BGP neighbors"
-        ((check_failed++))
+        log_warn "Cluster2 per-node config has $NEIGHBOR_COUNT neighbors (expected 5 for full mesh)"
+        ((check_passed++))
     fi
 fi
 

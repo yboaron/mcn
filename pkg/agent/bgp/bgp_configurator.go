@@ -94,16 +94,39 @@ func NewBGPConfigurator(config *Config) (*BGPConfigurator, error) {
 }
 
 // ReconcileBGPConfig creates/updates FRRConfiguration for BGP peering
-func (c *BGPConfigurator) ReconcileBGPConfig(ctx context.Context, remoteClusters []*skynetv1.Cluster,
+// Creates one per-node FRRConfiguration for each local node
+// Note: We don't use a generic cluster-wide config because FRR-K8s validates
+// all configs together and rejects multiple router IDs for the same ASN
+func (c *BGPConfigurator) ReconcileBGPConfig(ctx context.Context, localCluster *skynetv1.Cluster, remoteClusters []*skynetv1.Cluster,
 	multiClusterNetworks []*skynetv1.MultiClusterNetwork) error {
-	klog.V(2).Infof("Reconciling BGP configuration for %d remote clusters", len(remoteClusters))
+	klog.V(2).Infof("Reconciling BGP configuration: %d local endpoints, %d remote clusters",
+		len(localCluster.Status.Endpoints), len(remoteClusters))
 
-	configName := "skynet-bgp-config"
+	// Delete old generic config if it exists (migration from old approach)
+	if err := c.deleteGenericBGPConfig(ctx); err != nil {
+		klog.V(4).Infof("No generic config to delete (expected): %v", err)
+	}
 
-	// Build FRRConfiguration
-	frrConfig := c.buildFRRConfiguration(configName, remoteClusters, multiClusterNetworks)
+	// Create per-node FRRConfiguration for each local node (ASN, router ID, neighbors excluding self)
+	for _, endpoint := range localCluster.Status.Endpoints {
+		neighbors := c.buildNeighborsForNode(endpoint.BgpPeerIP, localCluster, remoteClusters)
+		if err := c.reconcileNodeBGPConfigWithNeighbors(ctx, endpoint.Node, endpoint.BgpPeerIP, neighbors); err != nil {
+			klog.Errorf("Failed to reconcile BGP config for node %s: %v", endpoint.Node, err)
+			// Continue with other nodes instead of failing completely
+		}
+	}
 
+	klog.V(2).Infof("BGP configuration reconciled: %d per-node configs", len(localCluster.Status.Endpoints))
+	return nil
+}
+
+// reconcileNodeBGPConfigWithNeighbors creates/updates per-node FRRConfiguration with neighbors
+func (c *BGPConfigurator) reconcileNodeBGPConfigWithNeighbors(ctx context.Context, nodeName, bgpPeerIP string, neighbors []map[string]interface{}) error {
+	configName := fmt.Sprintf("skynet-node-%s", nodeName)
 	frrNamespace := "frr-k8s-system"
+
+	// Build node-specific FRRConfiguration with neighbors
+	frrConfig := c.buildNodeFRRConfigurationWithNeighbors(configName, nodeName, bgpPeerIP, neighbors)
 
 	// Check if FRRConfiguration already exists
 	existingConfig, err := c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Get(ctx, configName, metav1.GetOptions{})
@@ -112,62 +135,65 @@ func (c *BGPConfigurator) ReconcileBGPConfig(ctx context.Context, remoteClusters
 		frrConfig.SetResourceVersion(existingConfig.GetResourceVersion())
 		_, err = c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Update(ctx, frrConfig, metav1.UpdateOptions{})
 		if err != nil {
-			return errors.Wrap(err, "failed to update FRRConfiguration")
+			return errors.Wrapf(err, "failed to update node FRRConfiguration for %s", nodeName)
 		}
-		klog.V(4).Info("Updated FRRConfiguration")
+		klog.V(4).Infof("Updated node FRRConfiguration for %s with %d neighbors", nodeName, len(neighbors))
 	} else {
 		// Create new configuration
 		_, err = c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Create(ctx, frrConfig, metav1.CreateOptions{})
 		if err != nil {
-			return errors.Wrap(err, "failed to create FRRConfiguration")
+			return errors.Wrapf(err, "failed to create node FRRConfiguration for %s", nodeName)
 		}
-		klog.Info("Created FRRConfiguration")
+		klog.Infof("Created node FRRConfiguration for %s with %d neighbors", nodeName, len(neighbors))
 	}
 
 	return nil
 }
 
-// buildFRRConfiguration builds the FRRConfiguration object
-func (c *BGPConfigurator) buildFRRConfiguration(name string, remoteClusters []*skynetv1.Cluster,
-	multiClusterNetworks []*skynetv1.MultiClusterNetwork) *unstructured.Unstructured {
+// deleteGenericBGPConfig deletes the old generic cluster-wide FRRConfiguration
+// Used for migration from hybrid approach to per-node-only approach
+func (c *BGPConfigurator) deleteGenericBGPConfig(ctx context.Context) error {
+	configName := "skynet-bgp-config"
+	frrNamespace := "frr-k8s-system"
 
-	// Build BGP router config
-	router := map[string]interface{}{
-		"asn":       c.localASN,
-		"neighbors": c.buildNeighbors(remoteClusters),
+	err := c.localClient.Resource(FRRConfigurationGVR).Namespace(frrNamespace).Delete(ctx, configName, metav1.DeleteOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to delete generic FRRConfiguration")
 	}
 
-	// Build spec - no nodeSelector means apply to all nodes (FRR-K8s behavior)
-	spec := map[string]interface{}{
-		"bgp": map[string]interface{}{
-			"routers": []map[string]interface{}{router},
-		},
-	}
-
-	// TODO: Add L2VPN EVPN address family when FRR-K8s supports it
-	// See: https://github.com/metallb/frr-k8s/pull/372
-
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "frrk8s.metallb.io/v1beta1",
-			"kind":       "FRRConfiguration",
-			"metadata": map[string]interface{}{
-				"name":      name,
-				"namespace": "frr-k8s-system",  // FRR-K8s watches this namespace
-				"labels": map[string]interface{}{
-					"skynet.io/managed-by":    "skynet-agent",
-					"skynet.io/local-cluster": c.clusterID,
-				},
-			},
-			"spec": spec,
-		},
-	}
+	klog.Info("Deleted generic FRRConfiguration (migrated to per-node configs)")
+	return nil
 }
 
-// buildNeighbors builds the BGP neighbor list
-func (c *BGPConfigurator) buildNeighbors(remoteClusters []*skynetv1.Cluster) []map[string]interface{} {
-	var neighbors []map[string]interface{}
 
+// buildNeighborsForNode builds the BGP neighbor list for a specific node
+// Excludes self from the neighbor list (proper full mesh)
+// Includes both intra-cluster (iBGP with other local nodes) and inter-cluster (eBGP with remote nodes)
+func (c *BGPConfigurator) buildNeighborsForNode(nodeBgpPeerIP string, localCluster *skynetv1.Cluster, remoteClusters []*skynetv1.Cluster) []map[string]interface{} {
+	var neighbors []map[string]interface{}
+	intraCount := 0
+	interCount := 0
+
+	// Add intra-cluster neighbors (iBGP peering within same cluster)
+	// All local nodes share the same ASN, so this is iBGP full mesh
+	for _, endpoint := range localCluster.Status.Endpoints {
+		// Exclude self - don't peer with own IP
+		if endpoint.BgpPeerIP == nodeBgpPeerIP {
+			continue
+		}
+
+		neighbor := map[string]interface{}{
+			"address": endpoint.BgpPeerIP,
+			"asn":     localCluster.Spec.ASN, // Same ASN = iBGP
+		}
+
+		neighbors = append(neighbors, neighbor)
+		intraCount++
+		klog.V(4).Infof("Node %s: added intra-cluster iBGP neighbor %s (ASN %d)", nodeBgpPeerIP, endpoint.BgpPeerIP, localCluster.Spec.ASN)
+	}
+
+	// Add inter-cluster neighbors (eBGP peering with remote clusters)
+	// Remote clusters have different ASNs, so this is eBGP
 	for _, remoteCluster := range remoteClusters {
 		for _, endpoint := range remoteCluster.Status.Endpoints {
 			// Skip non-route-reflector nodes if using RR topology and this is not an RR
@@ -177,13 +203,18 @@ func (c *BGPConfigurator) buildNeighbors(remoteClusters []*skynetv1.Cluster) []m
 
 			neighbor := map[string]interface{}{
 				"address":      endpoint.BgpPeerIP,
-				"asn":          remoteCluster.Spec.ASN,
+				"asn":          remoteCluster.Spec.ASN, // Different ASN = eBGP
 				"ebgpMultiHop": true,
 			}
 
 			neighbors = append(neighbors, neighbor)
+			interCount++
+			klog.V(4).Infof("Node %s: added inter-cluster eBGP neighbor %s (ASN %d)", nodeBgpPeerIP, endpoint.BgpPeerIP, remoteCluster.Spec.ASN)
 		}
 	}
+
+	klog.V(2).Infof("Built neighbor list for node %s: %d intra-cluster (iBGP) + %d inter-cluster (eBGP) = %d total neighbors",
+		nodeBgpPeerIP, intraCount, interCount, len(neighbors))
 
 	return neighbors
 }
@@ -245,7 +276,45 @@ func (c *BGPConfigurator) ReconcileNodeBGPConfig(ctx context.Context, nodeName, 
 	return nil
 }
 
-// buildNodeFRRConfiguration builds a node-specific FRRConfiguration
+// buildNodeFRRConfigurationWithNeighbors builds a node-specific FRRConfiguration with neighbors
+// Note: We don't set router ID explicitly - FRR will auto-assign it to the node's IP
+// This avoids FRR-K8s validation webhook errors about different router IDs in the same namespace
+func (c *BGPConfigurator) buildNodeFRRConfigurationWithNeighbors(name, nodeName, bgpPeerIP string, neighbors []map[string]interface{}) *unstructured.Unstructured {
+	router := map[string]interface{}{
+		"asn":       c.localASN,
+		// Don't set "id" - FRR will use node's IP as router ID automatically
+		"neighbors": neighbors,
+	}
+
+	spec := map[string]interface{}{
+		"bgp": map[string]interface{}{
+			"routers": []map[string]interface{}{router},
+		},
+		"nodeSelector": map[string]interface{}{
+			"kubernetes.io/hostname": nodeName,
+		},
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "frrk8s.metallb.io/v1beta1",
+			"kind":       "FRRConfiguration",
+			"metadata": map[string]interface{}{
+				"name":      name,
+				"namespace": "frr-k8s-system",
+				"labels": map[string]interface{}{
+					"skynet.io/managed-by":    "skynet-agent",
+					"skynet.io/local-cluster": c.clusterID,
+					"skynet.io/config-type":   "per-node",
+					"skynet.io/node":          nodeName,
+				},
+			},
+			"spec": spec,
+		},
+	}
+}
+
+// buildNodeFRRConfiguration builds a node-specific FRRConfiguration (legacy, for backwards compat)
 func (c *BGPConfigurator) buildNodeFRRConfiguration(name, nodeName, bgpPeerIP string) *unstructured.Unstructured {
 	spec := map[string]interface{}{
 		"bgp": map[string]interface{}{

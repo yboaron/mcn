@@ -367,6 +367,12 @@ func (a *Agent) reconcile(ctx context.Context) error {
 		klog.Warningf("Failed to update cluster status (will retry): %v", err)
 	}
 
+	// Refresh local cluster from API server to get latest endpoints in status
+	// This ensures BGP configurator has up-to-date endpoint list for intra-cluster peering
+	if err := a.refreshLocalCluster(ctx); err != nil {
+		return errors.Wrap(err, "failed to refresh local cluster state")
+	}
+
 	// Get remote clusters from local synced copies (skynet-operator namespace)
 	// The broker syncer imports remote Cluster CRs from broker to local
 	remoteClusters, err := a.getRemoteClustersFromLocal(ctx)
@@ -379,9 +385,10 @@ func (a *Agent) reconcile(ctx context.Context) error {
 	var multiClusterNetworks []*skynetv1.MultiClusterNetwork
 
 	// Reconcile BGP configuration
-	// BGP configurator reads remote cluster endpoints from remoteClusters
-	// No need for separate VTEP CRs - we get endpoint info from broker Cluster CRs
-	if err := a.bgpConfigurator.ReconcileBGPConfig(ctx, remoteClusters, multiClusterNetworks); err != nil {
+	// Full mesh topology: each node peers with all other nodes (intra-cluster iBGP + inter-cluster eBGP)
+	// - Intra-cluster: N-1 iBGP sessions (same ASN, FRR ignores self-peering)
+	// - Inter-cluster: M eBGP sessions per remote cluster (different ASN, ebgpMultiHop)
+	if err := a.bgpConfigurator.ReconcileBGPConfig(ctx, a.cluster, remoteClusters, multiClusterNetworks); err != nil {
 		return errors.Wrap(err, "failed to reconcile BGP config")
 	}
 
@@ -537,6 +544,29 @@ func (a *Agent) getRemoteClustersFromLocal(ctx context.Context) ([]*skynetv1.Clu
 
 	klog.V(4).Infof("Found %d remote clusters in local sync", len(remoteClusters))
 	return remoteClusters, nil
+}
+
+// refreshLocalCluster refreshes the in-memory cluster state from the API server
+// This ensures we have the latest endpoints and status for BGP configuration
+func (a *Agent) refreshLocalCluster(ctx context.Context) error {
+	localNS := "skynet-operator"
+
+	// Get latest cluster from local API server
+	clusterUnstructured, err := a.localClient.Resource(skynetv1.ClusterGVR).Namespace(localNS).Get(ctx, a.clusterID, metav1.GetOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to get local Cluster CR")
+	}
+
+	cluster := &skynetv1.Cluster{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(clusterUnstructured.Object, cluster); err != nil {
+		return errors.Wrap(err, "failed to convert Cluster")
+	}
+
+	// Update in-memory cluster
+	a.cluster = cluster
+	klog.V(4).Infof("Refreshed local cluster state: %d endpoints", len(cluster.Status.Endpoints))
+
+	return nil
 }
 
 // GetCluster returns the current Cluster CR
