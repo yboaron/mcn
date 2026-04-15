@@ -291,7 +291,9 @@ func (c *BGPConfigurator) buildNodeFRRConfigurationWithNeighbors(name, nodeName,
 			"routers": []map[string]interface{}{router},
 		},
 		"nodeSelector": map[string]interface{}{
-			"kubernetes.io/hostname": nodeName,
+			"matchLabels": map[string]interface{}{
+				"kubernetes.io/hostname": nodeName,
+			},
 		},
 	}
 
@@ -326,7 +328,9 @@ func (c *BGPConfigurator) buildNodeFRRConfiguration(name, nodeName, bgpPeerIP st
 			},
 		},
 		"nodeSelector": map[string]interface{}{
-			"kubernetes.io/hostname": nodeName,
+			"matchLabels": map[string]interface{}{
+				"kubernetes.io/hostname": nodeName,
+			},
 		},
 	}
 
