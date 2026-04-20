@@ -10,7 +10,7 @@ VERSION ?= latest
 .PHONY: help
 help:
 	@echo 'Skynet'
-	@echo '  make deploy        — fresh 2× OVN-K kind + broker + FRR + skynet-agent (manifest apply)'
+	@echo '  make deploy        — fresh 2× OVN-K kind + broker + FRR + skynet-agent + verify (fully automated)'
 	@echo '  make clusters      — clusters + broker CRDs + pools ConfigMap + RBAC (test/setup-clusters-v2.sh)'
 	@echo '  make clean         — delete kind clusters + test artifacts (test/cleanup.sh)'
 	@echo '  make verify-bgp    — after deploy: agents, broker Cluster CRs, VTEP, FRR, BGP mesh checks'
@@ -18,6 +18,7 @@ help:
 	@echo 'Pieces (also used by deploy):'
 	@echo '  make build-agent   — docker build + kind load (test/build-and-load.sh)'
 	@echo '  make deploy-agents — kubectl apply test/manifests/skynet-agent + Secret/ConfigMap (test/deploy-agents.sh)'
+	@echo '  make fix-bgp       — patch FRR-K8s to enable BGP on 0.0.0.0:179 (workaround for upstream)'
 	@echo ''
 	@echo '  make test          — go test ./...'
 	@echo ''
@@ -39,6 +40,10 @@ build-agent:
 deploy-agents:
 	cd test && ./deploy-agents.sh
 
+.PHONY: fix-bgp
+fix-bgp:
+	cd test && ./workaround-frr-bgp.sh
+
 .PHONY: deploy
 deploy:
 	@echo ""
@@ -50,9 +55,13 @@ deploy:
 	$(MAKE) deploy-agents
 	@echo ""
 	@echo "Applying FRR-K8s BGP listening port workaround..."
-	cd test && ./workaround-frr-bgp.sh
+	$(MAKE) fix-bgp
 	@echo ""
-	@echo "✓ deploy complete. Next: make verify-bgp"
+	@echo "⏳ Waiting 60s for BGP sessions to establish..."
+	@sleep 60
+	@echo ""
+	@echo "Running BGP verification..."
+	$(MAKE) verify-bgp
 
 .PHONY: verify-bgp
 verify-bgp:

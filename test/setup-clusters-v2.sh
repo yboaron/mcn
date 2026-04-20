@@ -24,10 +24,15 @@ BROKER_NAMESPACE="skynet-broker"
 NUM_WORKERS="${NUM_WORKERS:-2}"
 
 # OVN-K Configuration with EVPN+FRR-K8s support
-# Using jcaamano's branch with EVPN API and FRR-K8s integration
-# See: https://github.com/ovn-org/ovn-kubernetes/pull/6127
-OVNK_REPO="${OVNK_REPO:-https://github.com/jcaamano/ovn-kubernetes.git}"
-OVNK_BRANCH="${OVNK_BRANCH:-evpn-frr-k8s-api}"
+# Using UPSTREAM ovn-org/ovn-kubernetes (all features now merged!)
+# Upstream already has:
+# - FRR-K8s installation support (-rae flag, install_frr_k8s function)
+# - VTEP Controller (upstream PR #6078, merged Apr 8)
+# - EVPN Node Controller (upstream PR #5988, merged Apr 2)
+# - RouteAdvertisement CRDs
+# - EVPN enable flag (-evpn)
+OVNK_REPO="${OVNK_REPO:-https://github.com/ovn-org/ovn-kubernetes.git}"
+OVNK_BRANCH="${OVNK_BRANCH:-master}"
 OVNK_CLONE_DIR="/tmp/ovn-kubernetes-skynet-$$"
 
 log_info() {
@@ -160,6 +165,29 @@ patch_multus_timeout() {
     log_info "✓ Patched multus wait timeout to 300s (was ~51s)"
 }
 
+# WORKAROUND: Make external FRR vtysh commands non-fatal
+#
+# ISSUE: External FRR container is optional demo/test component, not required for SkyNet.
+#        However, kind.sh tries to configure it with vtysh, which fails if vtysh.conf is missing.
+#        This causes setup to exit early with "set -e" before OVN-K installation completes.
+#
+# ROOT CAUSE: kind-common.sh line ~1137 runs vtysh without error handling.
+#
+# WORKAROUND: Add "|| true" to make vtysh command non-fatal.
+#
+# IMPACT: Safe - external FRR is optional. SkyNet uses FRR-K8s (deployed by -rae flag).
+#
+patch_external_frr_vtysh() {
+    log_info "Patching OVN-K scripts to make external FRR vtysh non-fatal..."
+
+    # Make vtysh command non-fatal (external FRR is optional for SkyNet)
+    # Line 1137 in kind-common.sh: $OCI_BIN exec frr vtysh "${vtysh_cmds[@]}"
+    sed -i.bak '/exec frr vtysh.*vtysh_cmds/s/$/ || true/' \
+        "$OVNK_CLONE_DIR/contrib/kind-common.sh"
+
+    log_info "✓ Patched external FRR vtysh to be non-fatal"
+}
+
 # Create KIND clusters using OVN-K kind.sh
 create_clusters() {
     log_info "Creating KIND clusters with OVN-Kubernetes..."
@@ -176,6 +204,9 @@ create_clusters() {
     # Patch to increase multus pod wait timeout
     patch_multus_timeout
 
+    # Patch to make external FRR vtysh non-fatal
+    patch_external_frr_vtysh
+
     # Create cluster1
     if kind get clusters 2>/dev/null | grep -q "^${CLUSTER1_NAME}$"; then
         log_warn "Cluster ${CLUSTER1_NAME} already exists, skipping creation"
@@ -185,10 +216,12 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER1_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
-          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae
+          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae -evpn -gm local
         # -ic: Install OVN-K from source
         # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
-        # -rae: Route advertisements enable (auto-installs FRR-K8s with EVPN)
+        # -rae: Route advertisements enable (auto-installs FRR-K8s)
+        # -evpn: Enable EVPN support (activates VTEP controller for IP allocation)
+        # -gm local: Local gateway mode (required for EVPN)
         popd > /dev/null
 
         # Export kubeconfig
@@ -205,10 +238,12 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER2_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
-          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae
+          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae -evpn -gm local
         # -ic: Install OVN-K from source
         # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
-        # -rae: Route advertisements enable (auto-installs FRR-K8s with EVPN)
+        # -rae: Route advertisements enable (auto-installs FRR-K8s)
+        # -evpn: Enable EVPN support (activates VTEP controller for IP allocation)
+        # -gm local: Local gateway mode (required for EVPN)
         popd > /dev/null
 
         # Export kubeconfig
@@ -496,10 +531,11 @@ main() {
     log_info "=== Setup complete ==="
     log_info ""
     log_info "Clusters created with:"
-    log_info "  ✓ OVN-Kubernetes CNI (built from ${OVNK_BRANCH})"
+    log_info "  ✓ OVN-Kubernetes CNI (upstream ${OVNK_REPO} @ ${OVNK_BRANCH})"
     log_info "  ✓ Multi-network support enabled (CUDN/UserDefinedNetwork)"
-    log_info "  ✓ FRR-K8s with EVPN API support (auto-installed by -rae flag)"
-    log_info "  ✓ VTEP CRD support verified"
+    log_info "  ✓ FRR-K8s (auto-installed by upstream -rae flag)"
+    log_info "  ✓ EVPN support enabled (VTEP controller active)"
+    log_info "  ✓ VTEP CRD verified"
     log_info "  ✓ SkyNet CRDs on broker"
     log_info "  ✓ RBAC configured for agents"
     log_info "  ✓ Broker tokens created"
