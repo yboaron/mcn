@@ -281,10 +281,10 @@ wait_for_pod_ips() {
         log_warn "Using .status.podIP (annotation not found)"
     fi
 
-    if [[ "$POD1_IP" =~ ^10\.200\. ]]; then
-        log_info "✓ Cluster1 pod IP: $POD1_IP (from CUDN subnet 10.200.0.0/16)"
+    if [[ "$POD1_IP" =~ ^10\.100\. ]]; then
+        log_info "✓ Cluster1 pod IP: $POD1_IP (from CUDN subnet 10.100.0.0/16)"
     else
-        log_warn "Cluster1 pod IP: $POD1_IP (expected 10.200.x.x)"
+        log_warn "Cluster1 pod IP: $POD1_IP (expected 10.100.x.x)"
     fi
 
     # Wait for cluster2 pod
@@ -303,10 +303,10 @@ wait_for_pod_ips() {
         log_warn "Using .status.podIP (annotation not found)"
     fi
 
-    if [[ "$POD2_IP" =~ ^10\.201\. ]]; then
-        log_info "✓ Cluster2 pod IP: $POD2_IP (from CUDN subnet 10.201.0.0/16)"
+    if [[ "$POD2_IP" =~ ^10\.200\. ]]; then
+        log_info "✓ Cluster2 pod IP: $POD2_IP (from CUDN subnet 10.200.0.0/16)"
     else
-        log_warn "Cluster2 pod IP: $POD2_IP (expected 10.201.x.x)"
+        log_warn "Cluster2 pod IP: $POD2_IP (expected 10.200.x.x)"
     fi
 
     echo ""
@@ -332,7 +332,7 @@ verify_agent_work() {
     fi
 
     # Check CUDN EVPN config
-    TRANSPORT=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.transport}' 2>/dev/null || echo "")
+    TRANSPORT=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.transport}' 2>/dev/null || echo "")
     if [ "$TRANSPORT" = "EVPN" ]; then
         log_info "✓ CUDN transport: EVPN"
     else
@@ -341,16 +341,16 @@ verify_agent_work() {
     fi
 
     # Check VNI
-    VNI=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.evpnConfiguration.ipVRF.vni}' 2>/dev/null || echo "")
+    VNI=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.evpn.ipVRF.vni}' 2>/dev/null || echo "")
     if [ -n "$VNI" ]; then
         log_info "✓ VNI allocated: $VNI"
     else
-        log_error "VNI not found in CUDN evpnConfiguration"
+        log_error "VNI not found in CUDN EVPN config"
         return 1
     fi
 
     # Check Route Target
-    RT=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.evpnConfiguration.ipVRF.routeTarget}' 2>/dev/null || echo "")
+    RT=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.evpn.ipVRF.routeTarget}' 2>/dev/null || echo "")
     if [ -n "$RT" ]; then
         log_info "✓ Route Target: $RT"
     else
@@ -359,7 +359,7 @@ verify_agent_work() {
     fi
 
     # Check VTEP reference
-    VTEP=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.evpnConfiguration.vtep}' 2>/dev/null || echo "")
+    VTEP=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.evpn.vtep}' 2>/dev/null || echo "")
     if [ "$VTEP" = "skynet-local" ]; then
         log_info "✓ VTEP reference: skynet-local"
     else
@@ -404,7 +404,7 @@ verify_agent_work() {
     fi
 
     # Check CUDN EVPN config
-    TRANSPORT2=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.transport}' 2>/dev/null || echo "")
+    TRANSPORT2=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.transport}' 2>/dev/null || echo "")
     if [ "$TRANSPORT2" = "EVPN" ]; then
         log_info "✓ CUDN transport: EVPN"
     else
@@ -413,7 +413,7 @@ verify_agent_work() {
     fi
 
     # Check VNI matches cluster1
-    VNI2=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.evpnConfiguration.ipVRF.vni}' 2>/dev/null || echo "")
+    VNI2=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.evpn.ipVRF.vni}' 2>/dev/null || echo "")
     if [ "$VNI2" = "$VNI" ]; then
         log_info "✓ VNI matches cluster1: $VNI2"
     else
@@ -441,8 +441,8 @@ test_connectivity() {
 
     echo ""
     log_info "Testing connectivity between:"
-    log_info "  Cluster1 pod: $POD1_IP (CUDN subnet: 10.200.0.0/16)"
-    log_info "  Cluster2 pod: $POD2_IP (CUDN subnet: 10.201.0.0/16)"
+    log_info "  Cluster1 pod: $POD1_IP (CUDN subnet: 10.100.0.0/16)"
+    log_info "  Cluster2 pod: $POD2_IP (CUDN subnet: 10.200.0.0/16)"
     echo ""
 
     # Wait a bit for BGP routes to propagate
@@ -489,7 +489,7 @@ print_summary() {
     echo ""
     log_info "What was tested:"
     log_info "  ✓ Created Layer3 CUDN on both clusters"
-    log_info "  ✓ Pods got IPs from CUDN subnets (10.200.x.x and 10.201.x.x)"
+    log_info "  ✓ Pods got IPs from CUDN subnets (10.100.x.x and 10.200.x.x)"
     log_info "  ✓ Created MCNC on cluster1 (created MCN)"
     log_info "  ✓ Created MCNC on cluster2 (joined MCN)"
     log_info "  ✓ SkyNet agent injected EVPN config into CUDNs"
