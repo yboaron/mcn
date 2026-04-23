@@ -25,13 +25,48 @@ Built on top of:
 - Public-to-public, public-to-private, and private-to-private cluster connectivity
 - Minimal manual BGP configuration required
 
-## Documentation
+## Quick Start
 
-_(To be added)_
+### Deploy Test Environment
 
-## Getting Started
+```bash
+# Deploy 2 Kind clusters with OVN-K, FRR-K8s, and SkyNet agents
+make deploy         # Takes ~7-8 minutes
 
-_(To be added)_
+# Verify BGP sessions established
+make verify-bgp
+```
+
+### Test CUDN Stretching
+
+```bash
+# Test Layer3 CUDN stretching across clusters
+make test-cudn-l3   # Creates CUDN with EVPN, tests pod-to-pod connectivity
+
+# Cleanup test resources
+make cleanup-cudn
+```
+
+### Available Commands
+
+- `make deploy` - Fresh deployment (clusters + BGP + agents)
+- `make clusters` - Create Kind clusters only
+- `make build-agent` - Build and load agent image
+- `make deploy-agents` - Deploy SkyNet agents
+- `make verify-bgp` - Verify BGP sessions
+- `make test-cudn-l3` - Test CUDN EVPN stretching
+- `make cleanup-cudn` - Clean CUDN test resources
+- `make clean` - Delete all Kind clusters
+
+## Architecture
+
+The SkyNet agent runs in each cluster and handles:
+- **MCNC Controller**: Reconciles MultiClusterNetworkConnect resources
+- **CUDN Integrator**: Creates CUDNs with EVPN configuration (VNI, RouteTarget)
+- **RouteAdvertisement Creator**: Triggers OVN-K BGP route advertisement
+- **MCN Manager**: Manages MultiClusterNetwork lifecycle on broker
+- **VNI Allocator**: Allocates unique VNI (5000-10000) per network
+- **BGP Configurator**: Generates per-node FRRConfiguration for BGP mesh
 
 ## License
 
