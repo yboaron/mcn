@@ -33,6 +33,7 @@ NUM_WORKERS="${NUM_WORKERS:-2}"
 # - EVPN enable flag (-evpn)
 OVNK_REPO="${OVNK_REPO:-https://github.com/ovn-org/ovn-kubernetes.git}"
 OVNK_BRANCH="${OVNK_BRANCH:-master}"
+OVNK_COMMIT="${OVNK_COMMIT:-}"  # Optional: pin to specific commit (empty = use branch HEAD)
 OVNK_CLONE_DIR="/tmp/ovn-kubernetes-skynet-$$"
 
 log_info() {
@@ -90,9 +91,27 @@ clone_ovnk() {
     log_info "Cloning OVN-Kubernetes from GitHub..."
     log_info "  Repo: $OVNK_REPO"
     log_info "  Branch: $OVNK_BRANCH"
+    if [ -n "$OVNK_COMMIT" ]; then
+        log_info "  Commit: $OVNK_COMMIT (pinned)"
+    fi
     log_info "  Clone dir: $OVNK_CLONE_DIR"
 
-    git clone --depth 1 --branch "$OVNK_BRANCH" "$OVNK_REPO" "$OVNK_CLONE_DIR"
+    # Clone with more depth to allow checking out specific commits
+    # Use --depth 200 to get ~2 months of commits (ensures we can access recent EVPN merges)
+    git clone --depth 200 --branch "$OVNK_BRANCH" "$OVNK_REPO" "$OVNK_CLONE_DIR"
+
+    cd "$OVNK_CLONE_DIR"
+
+    # Checkout specific commit if requested (for pinning to known-good EVPN-enabled commit)
+    if [ -n "$OVNK_COMMIT" ]; then
+        log_info "Checking out commit $OVNK_COMMIT..."
+        git checkout "$OVNK_COMMIT"
+        log_info "✓ Checked out commit $(git rev-parse --short HEAD)"
+    else
+        log_info "Using branch HEAD: $(git rev-parse --short HEAD)"
+    fi
+
+    cd - > /dev/null
 
     if [ ! -f "$OVNK_CLONE_DIR/contrib/kind.sh" ]; then
         log_error "kind.sh not found in cloned OVN-K repo"
@@ -108,8 +127,13 @@ patch_kind_for_ubuntu() {
 
     if grep -q "fedora-image" "$KIND_COMMON"; then
         log_info "Patching kind-common.sh to use ubuntu-image..."
+        # Change Dockerfile target (for make command)
         sed -i.bak 's/fedora-image/ubuntu-image/g' "$KIND_COMMON"
-        log_info "✓ Patched to use ubuntu-image"
+        # Fix the OVN_IMAGE variable in set_ovn_image function (line ~228)
+        # Change: OVN_IMAGE="localhost/ovn-daemonset-fedora:dev"
+        # To:     OVN_IMAGE="ovn-kube-ubuntu:latest"
+        sed -i 's/OVN_IMAGE="localhost\/ovn-daemonset-fedora:dev"/OVN_IMAGE="ovn-kube-ubuntu:latest"/g' "$KIND_COMMON"
+        log_info "✓ Patched to use ubuntu-image (image: ovn-kube-ubuntu:latest)"
     fi
 }
 
@@ -212,13 +236,15 @@ create_clusters() {
         log_warn "Cluster ${CLUSTER1_NAME} already exists, skipping creation"
     else
         log_info "Creating cluster ${CLUSTER1_NAME} with $NUM_WORKERS workers (this may take 5-10 minutes)..."
+        log_info "Building OVN-K from commit: $(cd "$OVNK_CLONE_DIR" && git rev-parse --short HEAD) ($(cd "$OVNK_CLONE_DIR" && git log -1 --format=%ci | cut -d' ' -f1))"
 
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER1_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
-          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae -evpn -gm local
+          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -nse -rae -evpn -gm local
         # -ic: Install OVN-K from source
         # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
+        # -nse: Network segmentation enable (REQUIRED for CUDN to apply to pods!)
         # -rae: Route advertisements enable (auto-installs FRR-K8s)
         # -evpn: Enable EVPN support (activates VTEP controller for IP allocation)
         # -gm local: Local gateway mode (required for EVPN)
@@ -238,9 +264,10 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER2_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
-          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -rae -evpn -gm local
+          "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -nse -rae -evpn -gm local
         # -ic: Install OVN-K from source
         # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
+        # -nse: Network segmentation enable (REQUIRED for CUDN to apply to pods!)
         # -rae: Route advertisements enable (auto-installs FRR-K8s)
         # -evpn: Enable EVPN support (activates VTEP controller for IP allocation)
         # -gm local: Local gateway mode (required for EVPN)
@@ -277,6 +304,54 @@ kubectl_kind() {
     shift
     kubectl --kubeconfig "$(cluster_kubeconfig_path "$name")" "$@"
 }
+
+# Assign VTEP IPs to node loopback interfaces
+# Required for Unmanaged VTEP mode (Managed mode not yet implemented in OVN-K)
+# See: commit 357e39d5 "Prevent managed VTEPs from being accepted - temporary till we add support"
+assign_vtep_ips() {
+    log_info "Assigning VTEP IPs to node loopback interfaces (Unmanaged VTEP mode)..."
+
+    # Cluster1: VTEP CIDR 100.0.0.0/16
+    # Assign 100.0.0.1, 100.0.0.2, 100.0.0.3 to control-plane, worker, worker2
+    local ip_index=1
+    for node in $(kind get nodes --name "${CLUSTER1_NAME}" | sort); do
+        local vtep_ip="100.0.0.${ip_index}/32"
+        docker exec "$node" ip addr add "$vtep_ip" dev lo 2>/dev/null || true
+        log_info "  ${node}: ${vtep_ip}"
+        ip_index=$((ip_index + 1))
+    done
+
+    # Cluster2: VTEP CIDR 100.1.0.0/16
+    # Assign 100.1.0.1, 100.1.0.2, 100.1.0.3 to control-plane, worker, worker2
+    ip_index=1
+    for node in $(kind get nodes --name "${CLUSTER2_NAME}" | sort); do
+        local vtep_ip="100.1.0.${ip_index}/32"
+        docker exec "$node" ip addr add "$vtep_ip" dev lo 2>/dev/null || true
+        log_info "  ${node}: ${vtep_ip}"
+        ip_index=$((ip_index + 1))
+    done
+
+    log_info "✓ VTEP IPs assigned (OVN-K will discover them in Unmanaged mode)"
+}
+
+# DEPRECATED: Static VTEP routes no longer needed
+# BGP now advertises individual VTEP /32 IPs with proper nexthops automatically
+# Each node advertises its VTEP loopback IP (e.g., 100.0.0.2/32) via BGP
+# Remote nodes learn the route with nexthop = advertising node's IP (e.g., 172.18.0.2)
+# This function kept for reference only
+#
+# add_vtep_routes() {
+#     log_info "Adding routes to make VTEP IPs reachable across clusters..."
+#     local cluster1_gateway=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' cluster1-worker | head -1)
+#     local cluster2_gateway=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' cluster2-control-plane | head -1)
+#     for node in $(kind get nodes --name "${CLUSTER1_NAME}"); do
+#         docker exec "$node" ip route add 100.1.0.0/16 via "$cluster2_gateway" 2>/dev/null || true
+#     done
+#     for node in $(kind get nodes --name "${CLUSTER2_NAME}"); do
+#         docker exec "$node" ip route add 100.0.0.0/16 via "$cluster1_gateway" 2>/dev/null || true
+#     done
+#     log_info "✓ VTEP routes added (VXLAN packets can now reach remote nodes)"
+# }
 
 # Verify VTEP CRD is installed
 verify_vtep_crd() {
@@ -400,9 +475,15 @@ rules:
 - apiGroups: ["skynet.io"]
   resources: ["*"]
   verbs: ["*"]
+- apiGroups: ["skynet.io"]
+  resources: ["multiclusternetworkconnects/status"]
+  verbs: ["get", "update", "patch"]
 - apiGroups: ["k8s.ovn.org"]
   resources: ["vteps", "userdefinednetworks"]
   verbs: ["*"]
+- apiGroups: ["k8s.ovn.org"]
+  resources: ["clusteruserdefinednetworks"]
+  verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: ["frrk8s.metallb.io"]
   resources: ["frrconfigurations"]
   verbs: ["*"]
@@ -506,6 +587,8 @@ main() {
     clone_ovnk
     create_clusters
     verify_vtep_crd
+    assign_vtep_ips
+    # Note: VTEP routes are now advertised via BGP automatically (no static routes needed)
 
     # Cleanup OVN-K's default FRR configuration
     # The -rae flag already installed FRR-K8s, we just need to clean up its default config
@@ -536,6 +619,7 @@ main() {
     log_info "  ✓ FRR-K8s (auto-installed by upstream -rae flag)"
     log_info "  ✓ EVPN support enabled (VTEP controller active)"
     log_info "  ✓ VTEP CRD verified"
+    log_info "  ✓ VTEP IPs assigned (Unmanaged mode - OVN-K discovers from loopback)"
     log_info "  ✓ SkyNet CRDs on broker"
     log_info "  ✓ RBAC configured for agents"
     log_info "  ✓ Broker tokens created"

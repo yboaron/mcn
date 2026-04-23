@@ -48,6 +48,7 @@ type BGPConfigurator struct {
 	brokerNS     string
 	clusterID    string
 	localASN     int32
+	vtepCIDR     string
 	topology     BGPTopology
 }
 
@@ -68,6 +69,7 @@ type Config struct {
 	BrokerNS     string
 	ClusterID    string
 	LocalASN     int32
+	VtepCIDR     string
 	Topology     BGPTopology
 }
 
@@ -89,6 +91,7 @@ func NewBGPConfigurator(config *Config) (*BGPConfigurator, error) {
 		brokerNS:     config.BrokerNS,
 		clusterID:    config.ClusterID,
 		localASN:     config.LocalASN,
+		vtepCIDR:     config.VtepCIDR,
 		topology:     config.Topology,
 	}, nil
 }
@@ -185,6 +188,7 @@ func (c *BGPConfigurator) buildNeighborsForNode(nodeBgpPeerIP string, localClust
 		neighbor := map[string]interface{}{
 			"address": endpoint.BgpPeerIP,
 			"asn":     localCluster.Spec.ASN, // Same ASN = iBGP
+			// Don't specify toAdvertise/toReceive - FRR-K8s will allow all routes by default
 		}
 
 		neighbors = append(neighbors, neighbor)
@@ -205,6 +209,7 @@ func (c *BGPConfigurator) buildNeighborsForNode(nodeBgpPeerIP string, localClust
 				"address":      endpoint.BgpPeerIP,
 				"asn":          remoteCluster.Spec.ASN, // Different ASN = eBGP
 				"ebgpMultiHop": true,
+				// Don't specify toAdvertise/toReceive - FRR-K8s will allow all routes by default
 			}
 
 			neighbors = append(neighbors, neighbor)
@@ -286,6 +291,9 @@ func (c *BGPConfigurator) buildNodeFRRConfigurationWithNeighbors(name, nodeName,
 		"neighbors": neighbors,
 	}
 
+	// Don't add prefixes - we want to advertise individual /32 VTEP IPs via redistribute connected,
+	// not the /16 supernet via network statement
+
 	spec := map[string]interface{}{
 		"bgp": map[string]interface{}{
 			"routers": []map[string]interface{}{router},
@@ -295,6 +303,41 @@ func (c *BGPConfigurator) buildNodeFRRConfigurationWithNeighbors(name, nodeName,
 				"kubernetes.io/hostname": nodeName,
 			},
 		},
+	}
+
+	// Advertise VTEP IPs via BGP by redistributing connected routes
+	// This advertises the /32 loopback IPs (100.x.x.x/32) to remote clusters
+	// so they learn how to reach our VTEP IPs for VXLAN encapsulation
+	if c.vtepCIDR != "" {
+		// Build raw config to redistribute connected and remove FRR-K8s default deny-all route-maps
+		rawConfig := fmt.Sprintf(`router bgp %d
+ address-family ipv4 unicast
+  redistribute connected route-map VTEP_LOOPBACK
+ exit-address-family
+exit
+!
+ip prefix-list VTEP_PREFIXES permit %s ge 32 le 32
+!
+route-map VTEP_LOOPBACK permit 10
+ match ip address prefix-list VTEP_PREFIXES
+exit
+!`, c.localASN, c.vtepCIDR)
+
+		// Remove FRR-K8s generated route-maps that block advertisements
+		// FRR-K8s creates <neighbor-ip>-out route-maps with "deny any" by default
+		// We need to remove them so our redistributed /32 VTEP IPs can be advertised
+		rawConfig += fmt.Sprintf("\nrouter bgp %d\n address-family ipv4 unicast\n", c.localASN)
+		for _, n := range neighbors {
+			neighborAddr := n["address"].(string)
+			rawConfig += fmt.Sprintf("  no neighbor %s route-map %s-out out\n", neighborAddr, neighborAddr)
+			rawConfig += fmt.Sprintf("  no neighbor %s route-map %s-in in\n", neighborAddr, neighborAddr)
+		}
+		rawConfig += " exit-address-family\nexit\n!"
+
+		spec["raw"] = map[string]interface{}{
+			"priority":  5, // Lower than OVN-K's EVPN config (priority 10)
+			"rawConfig": rawConfig,
+		}
 	}
 
 	return &unstructured.Unstructured{

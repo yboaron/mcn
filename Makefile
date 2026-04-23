@@ -15,6 +15,10 @@ help:
 	@echo '  make clean         — delete kind clusters + test artifacts (test/cleanup.sh)'
 	@echo '  make verify-bgp    — after deploy: agents, broker Cluster CRs, VTEP, FRR, BGP mesh checks'
 	@echo ''
+	@echo 'CUDN Stretching Tests:'
+	@echo '  make test-cudn-l3  — test Layer3 CUDN stretching across clusters'
+	@echo '  make cleanup-cudn  — cleanup CUDN test resources'
+	@echo ''
 	@echo 'Pieces (also used by deploy):'
 	@echo '  make build-agent   — docker build + kind load (test/build-and-load.sh)'
 	@echo '  make deploy-agents — kubectl apply test/manifests/skynet-agent + Secret/ConfigMap (test/deploy-agents.sh)'
@@ -70,3 +74,19 @@ verify-bgp:
 .PHONY: test
 test:
 	go test ./...
+
+.PHONY: test-cudn-l3
+test-cudn-l3:
+	@echo ""
+	@echo "Running comprehensive CUDN Layer3 stretching test..."
+	@echo "This will:"
+	@echo "  1. Create MCNC on cluster1 (SkyNet creates CUDN with EVPN + deploy pod)"
+	@echo "  2. Create MCNC on cluster2 (SkyNet creates CUDN with EVPN + deploy pod)"
+	@echo "  3. Verify SkyNet agent configuration (EVPN transport, VNI, RT)"
+	@echo "  4. Test cross-cluster pod-to-pod connectivity via CUDN"
+	@echo ""
+	cd test && ./test-cudn-l3.sh
+
+.PHONY: cleanup-cudn
+cleanup-cudn:
+	cd test && ./cleanup-cudn-test.sh
