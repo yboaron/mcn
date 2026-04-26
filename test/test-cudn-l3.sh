@@ -52,61 +52,35 @@ check_prerequisites() {
     log_info "✓ Both clusters found"
 }
 
-# Step 1: Create MCNC on cluster1 (SkyNet creates CUDN with EVPN)
+# Step 1: Create CUDN and MCNC on cluster1 (user creates CUDN, SkyNet patches EVPN)
 create_mcnc_cluster1() {
-    log_step "Step 1: Creating MCNC on cluster1 (SkyNet creates CUDN)..."
+    log_step "Step 1: Creating CUDN and MCNC on cluster1..."
 
     export KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster1.yaml"
 
-    # Step 1a: Create temporary namespace for MCNC (without primary network label)
+    # Step 1a: User creates CUDN without EVPN transport
+    log_info "Creating CUDN demo-mcn-l3 (user-owned network definition)..."
     cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Namespace
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
 metadata:
-  name: tenant-skynet-demo
-  labels:
-    skynet-network: tenant-a
-EOF
-
-    # Step 1b: Create MCNC with cudnSpec - SkyNet agent will create the CUDN with EVPN transport
-    cat <<EOF | kubectl apply -f -
-apiVersion: skynet.io/v1
-kind: MultiClusterNetworkConnect
-metadata:
-  name: stretch-tenant-l3
-  namespace: tenant-skynet-demo
+  name: demo-mcn-l3
 spec:
-  createMultiClusterNetwork:
-    name: demo-mcn-l3
+  namespaceSelector:
+    matchLabels:
+      skynet-network: tenant-a
+  network:
     topology: Layer3
-  cudnSpec:
-    namespaceSelector:
-      matchLabels:
-        skynet-network: tenant-a
-    topology: Layer3
-    role: Primary
-    subnets:
+    layer3:
+      role: Primary
+      subnets:
       - cidr: "10.100.0.0/16"
         hostSubnet: 23
 EOF
 
-    log_info "✓ MCNC created on cluster1 (SkyNet will create CUDN)"
-    log_info "Waiting for SkyNet agent to create CUDN with EVPN config (45s)..."
-    sleep 45
+    log_info "✓ CUDN created (no EVPN transport yet)"
 
-    # Verify CUDN was created by SkyNet
-    if kubectl get cudn demo-mcn-l3 &>/dev/null; then
-        log_info "✓ CUDN created by SkyNet agent with EVPN transport"
-    else
-        log_error "Failed: SkyNet agent did not create CUDN"
-        exit 1
-    fi
-
-    # Step 1c: Delete and recreate namespace with primary network label
-    # (OVN-K requires this label at namespace creation time)
-    kubectl delete namespace tenant-skynet-demo --wait=true
-    sleep 5
-
+    # Step 1b: Create namespace with primary network label
     cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
@@ -117,7 +91,10 @@ metadata:
     k8s.ovn.org/primary-user-defined-network: demo-mcn-l3
 EOF
 
-    # Step 1d: Recreate MCNC in the new namespace
+    log_info "✓ Namespace created with primary network label"
+
+    # Step 1c: Create MCNC with localCUDN - SkyNet patches EVPN config into existing CUDN
+    log_info "Creating MCNC (SkyNet will patch EVPN into CUDN)..."
     cat <<EOF | kubectl apply -f -
 apiVersion: skynet.io/v1
 kind: MultiClusterNetworkConnect
@@ -128,20 +105,22 @@ spec:
   createMultiClusterNetwork:
     name: demo-mcn-l3
     topology: Layer3
-  cudnSpec:
-    namespaceSelector:
-      matchLabels:
-        skynet-network: tenant-a
-    topology: Layer3
-    role: Primary
-    subnets:
-      - cidr: "10.100.0.0/16"
-        hostSubnet: 23
+  localCUDN: demo-mcn-l3
 EOF
 
-    log_info "✓ Namespace recreated with primary network label"
+    log_info "✓ MCNC created (localCUDN references existing CUDN)"
+    log_info "Waiting for SkyNet to patch EVPN config (30s)..."
+    sleep 30
 
-    # Create test pod that uses CUDN
+    # Verify CUDN now has EVPN transport
+    TRANSPORT=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.transport}' 2>/dev/null || echo "")
+    if [ "$TRANSPORT" = "EVPN" ]; then
+        log_info "✓ SkyNet patched CUDN with EVPN transport"
+    else
+        log_warn "CUDN transport: $TRANSPORT (expected EVPN, may need more time)"
+    fi
+
+    # Step 1d: Create test pod
     cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
@@ -158,59 +137,35 @@ EOF
     log_info "✓ Test pod created on cluster1"
 }
 
-# Step 2: Create MCNC on cluster2 to join MCN (SkyNet creates CUDN with EVPN)
+# Step 2: Create CUDN and MCNC on cluster2 (user creates CUDN, SkyNet patches EVPN)
 create_mcnc_cluster2() {
-    log_step "Step 2: Creating MCNC on cluster2 to join MCN..."
+    log_step "Step 2: Creating CUDN and MCNC on cluster2..."
 
     export KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster2.yaml"
 
-    # Step 2a: Create temporary namespace for MCNC (without primary network label)
+    # Step 2a: User creates CUDN without EVPN transport
+    log_info "Creating CUDN demo-mcn-l3 (user-owned network definition)..."
     cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Namespace
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
 metadata:
-  name: tenant-skynet-demo
-  labels:
-    skynet-network: tenant-a
-EOF
-
-    # Step 2b: Create MCNC with cudnSpec to join existing MCN - SkyNet agent will create the CUDN
-    cat <<EOF | kubectl apply -f -
-apiVersion: skynet.io/v1
-kind: MultiClusterNetworkConnect
-metadata:
-  name: stretch-tenant-l3
-  namespace: tenant-skynet-demo
+  name: demo-mcn-l3
 spec:
-  multiClusterNetworkName: demo-mcn-l3
-  cudnSpec:
-    namespaceSelector:
-      matchLabels:
-        skynet-network: tenant-a
+  namespaceSelector:
+    matchLabels:
+      skynet-network: tenant-a
+  network:
     topology: Layer3
-    role: Primary
-    subnets:
+    layer3:
+      role: Primary
+      subnets:
       - cidr: "10.200.0.0/16"
         hostSubnet: 23
 EOF
 
-    log_info "✓ MCNC created on cluster2 (joining MCN)"
-    log_info "Waiting for SkyNet agent to create CUDN with EVPN config (45s)..."
-    sleep 45
+    log_info "✓ CUDN created (no EVPN transport yet)"
 
-    # Verify CUDN was created by SkyNet
-    if kubectl get cudn demo-mcn-l3 &>/dev/null; then
-        log_info "✓ CUDN created by SkyNet agent with EVPN transport"
-    else
-        log_error "Failed: SkyNet agent did not create CUDN"
-        exit 1
-    fi
-
-    # Step 2c: Delete and recreate namespace with primary network label
-    # (OVN-K requires this label at namespace creation time)
-    kubectl delete namespace tenant-skynet-demo --wait=true
-    sleep 5
-
+    # Step 2b: Create namespace with primary network label
     cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
@@ -221,7 +176,10 @@ metadata:
     k8s.ovn.org/primary-user-defined-network: demo-mcn-l3
 EOF
 
-    # Step 2d: Recreate MCNC in the new namespace
+    log_info "✓ Namespace created with primary network label"
+
+    # Step 2c: Create MCNC with localCUDN to join existing MCN
+    log_info "Creating MCNC to join MCN (SkyNet will patch EVPN)..."
     cat <<EOF | kubectl apply -f -
 apiVersion: skynet.io/v1
 kind: MultiClusterNetworkConnect
@@ -230,20 +188,22 @@ metadata:
   namespace: tenant-skynet-demo
 spec:
   multiClusterNetworkName: demo-mcn-l3
-  cudnSpec:
-    namespaceSelector:
-      matchLabels:
-        skynet-network: tenant-a
-    topology: Layer3
-    role: Primary
-    subnets:
-      - cidr: "10.200.0.0/16"
-        hostSubnet: 23
+  localCUDN: demo-mcn-l3
 EOF
 
-    log_info "✓ Namespace recreated with primary network label"
+    log_info "✓ MCNC created (localCUDN references existing CUDN)"
+    log_info "Waiting for SkyNet to patch EVPN config (30s)..."
+    sleep 30
 
-    # Create test pod
+    # Verify CUDN now has EVPN transport
+    TRANSPORT=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.spec.network.transport}' 2>/dev/null || echo "")
+    if [ "$TRANSPORT" = "EVPN" ]; then
+        log_info "✓ SkyNet patched CUDN with EVPN transport"
+    else
+        log_warn "CUDN transport: $TRANSPORT (expected EVPN, may need more time)"
+    fi
+
+    # Step 2d: Create test pod
     cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod

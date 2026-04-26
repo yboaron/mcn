@@ -301,9 +301,16 @@ type MultiClusterNetworkConnect struct {
 }
 
 type MultiClusterNetworkConnectSpec struct {
-	// LocalCUDN is the name of the local CUDN to connect
-	// +kubebuilder:validation:Required
-	LocalCUDN string `json:"localCUDN"`
+	// LocalCUDN is the name of an existing local CUDN to connect
+	// Mutually exclusive with CUDNSpec
+	// +optional
+	LocalCUDN string `json:"localCUDN,omitempty"`
+
+	// CUDNSpec specifies the CUDN to be created by SkyNet
+	// Mutually exclusive with LocalCUDN
+	// SkyNet will create the CUDN with EVPN configuration
+	// +optional
+	CUDNSpec *CUDNSpec `json:"cudnSpec,omitempty"`
 
 	// MultiClusterNetworkName is the name of the MultiClusterNetwork to join
 	// Mutually exclusive with CreateMultiClusterNetwork
@@ -314,6 +321,48 @@ type MultiClusterNetworkConnectSpec struct {
 	// Mutually exclusive with MultiClusterNetworkName
 	// +optional
 	CreateMultiClusterNetwork *CreateMultiClusterNetworkParams `json:"createMultiClusterNetwork,omitempty"`
+}
+
+// CUDNSpec defines the parameters for creating a ClusterUserDefinedNetwork
+type CUDNSpec struct {
+	// Name is the name of the CUDN to create
+	// If omitted, uses the MCNC name
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// NamespaceSelector selects which namespaces can use this network
+	// +kubebuilder:validation:Required
+	NamespaceSelector metav1.LabelSelector `json:"namespaceSelector"`
+
+	// Topology is the network topology
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=Layer2;Layer3
+	Topology NetworkTopology `json:"topology"`
+
+	// Subnets for the network
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	Subnets []CUDNSubnet `json:"subnets"`
+
+	// Role is the network role (Primary or Secondary)
+	// Defaults to Primary
+	// +optional
+	// +kubebuilder:validation:Enum=Primary;Secondary
+	// +kubebuilder:default=Primary
+	Role string `json:"role,omitempty"`
+}
+
+// CUDNSubnet defines a subnet for CUDN
+type CUDNSubnet struct {
+	// CIDR is the subnet CIDR
+	// +kubebuilder:validation:Required
+	CIDR string `json:"cidr"`
+
+	// HostSubnet is the per-node subnet prefix length
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=32
+	HostSubnet int32 `json:"hostSubnet"`
 }
 
 type CreateMultiClusterNetworkParams struct {

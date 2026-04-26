@@ -126,6 +126,10 @@ func (m *MCNManager) joinExistingMCN(ctx context.Context, mcn *skynetv1.MultiClu
 func (m *MCNManager) createNewMCN(ctx context.Context, mcnName string, topology skynetv1.NetworkTopology) (*skynetv1.MultiClusterNetwork, error) {
 	// Create MCN object
 	mcn := &skynetv1.MultiClusterNetwork{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: skynetv1.SchemeGroupVersion.String(),
+			Kind:       "MultiClusterNetwork",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       mcnName,
 			Finalizers: []string{m.getFinalizerName()},
@@ -161,6 +165,7 @@ func (m *MCNManager) createNewMCN(ctx context.Context, mcnName string, topology 
 		metav1.CreateOptions{},
 	)
 	if err != nil {
+		klog.Errorf("Failed to create MCN %s on broker: %v", mcnName, err)
 		if apierrors.IsAlreadyExists(err) {
 			// Race condition - another cluster created it first
 			// Try to join the existing one

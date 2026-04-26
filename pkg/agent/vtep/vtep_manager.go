@@ -43,8 +43,10 @@ var (
 const (
 	// LocalVTEPName is the name of the local VTEP resource
 	LocalVTEPName = "skynet-local"
-	// VTEPModeManaged means OVN-K manages VTEP IP allocation
+	// VTEPModeManaged means OVN-K manages VTEP IP allocation (not yet implemented upstream)
 	VTEPModeManaged = "Managed"
+	// VTEPModeUnmanaged means VTEP IPs are manually assigned (current OVN-K requirement)
+	VTEPModeUnmanaged = "Unmanaged"
 )
 
 // VtepManager manages VTEP resources for the local cluster
@@ -102,11 +104,13 @@ func (m *VtepManager) EnsureLocalVTEP(ctx context.Context) error {
 				},
 			},
 			"spec": map[string]interface{}{
-				// CIDRs is the list of IP ranges from which VTEP IPs are allocated
-				// This tells OVN-K to allocate VTEP IPs from this CIDR
+				// CIDRs is the list of IP ranges from which VTEP IPs are discovered
 				"cidrs": []string{m.vtepCIDR},
-				// Mode: "Managed" means OVN-K allocates and assigns VTEP IPs per node automatically
-				"mode": VTEPModeManaged,
+				// Mode: "Unmanaged" because OVN-K Managed mode is not yet implemented
+				// (commit 357e39d5: "temporary till we add support for managed VTEPs")
+				// VTEP IPs are assigned by setup script to node loopback interfaces
+				// TODO: Switch to Managed when OVN-K implements automatic allocation
+				"mode": VTEPModeUnmanaged,
 			},
 		},
 	}
@@ -127,7 +131,7 @@ func (m *VtepManager) EnsureLocalVTEP(ctx context.Context) error {
 		if err != nil {
 			return errors.Wrap(err, "failed to create local VTEP")
 		}
-		klog.Infof("Created local VTEP with CIDR %s (mode: %s)", m.vtepCIDR, VTEPModeManaged)
+		klog.Infof("Created local VTEP with CIDR %s (mode: %s)", m.vtepCIDR, VTEPModeUnmanaged)
 	} else {
 		return errors.Wrap(err, "failed to get local VTEP")
 	}

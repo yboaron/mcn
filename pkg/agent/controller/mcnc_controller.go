@@ -37,6 +37,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
+	"github.com/aswinsuryana/skynet/pkg/agent/allocator"
+	"github.com/aswinsuryana/skynet/pkg/agent/cudn"
+	"github.com/aswinsuryana/skynet/pkg/agent/mcn"
+	"github.com/aswinsuryana/skynet/pkg/agent/routeadv"
 )
 
 var (
@@ -51,10 +55,17 @@ var (
 // MCNCReconciler reconciles MultiClusterNetworkConnect resources
 type MCNCReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	DynamicClient dynamic.Interface
-	K8sClient     kubernetes.Interface
-	ClusterID     string
+	Scheme           *runtime.Scheme
+	DynamicClient    dynamic.Interface
+	K8sClient        kubernetes.Interface
+	ClusterID        string
+	BrokerClient     dynamic.Interface
+	BrokerNamespace  string
+	VTEPName         string
+	VNIAllocator     *allocator.VNIAllocator
+	MCNManager       *mcn.MCNManager
+	CUDNIntegrator   *cudn.CUDNIntegrator
+	RouteAdvCreator  *routeadv.Creator
 }
 
 // Reconcile handles MultiClusterNetworkConnect events
@@ -84,18 +95,7 @@ func (r *MCNCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 func (r *MCNCReconciler) reconcileMCNC(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
 	klog.V(2).Infof("Reconciling MCNC %s/%s for MCN %s", mcnc.Namespace, mcnc.Name, mcnc.Spec.MultiClusterNetworkName)
 
-	// Fetch the MultiClusterNetwork
-	mcn := &skynetv1.MultiClusterNetwork{}
-	if err := r.Get(ctx, client.ObjectKey{Name: mcnc.Spec.MultiClusterNetworkName}, mcn); err != nil {
-		// Update status to reflect error
-		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
-		if updateErr := r.Status().Update(ctx, mcnc); updateErr != nil {
-			klog.Errorf("Failed to update MCNC status: %v", updateErr)
-		}
-		return reconcile.Result{}, errors.Wrapf(err, "failed to get MultiClusterNetwork %s", mcnc.Spec.MultiClusterNetworkName)
-	}
-
-	// Verify namespace exists
+	// Step 1: Verify namespace exists
 	ns, err := r.K8sClient.CoreV1().Namespaces().Get(ctx, mcnc.Namespace, metav1.GetOptions{})
 	if err != nil {
 		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
@@ -105,13 +105,34 @@ func (r *MCNCReconciler) reconcileMCNC(ctx context.Context, mcnc *skynetv1.Multi
 		return reconcile.Result{}, errors.Wrapf(err, "failed to get namespace %s", mcnc.Namespace)
 	}
 
-	// Create or update UserDefinedNetwork for this namespace
-	if err := r.reconcileUserDefinedNetwork(ctx, mcnc, mcn, ns); err != nil {
+	// Step 2: Get or create MultiClusterNetwork on broker
+	mcn, err := r.reconcileMCN(ctx, mcnc)
+	if err != nil {
 		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
 		if updateErr := r.Status().Update(ctx, mcnc); updateErr != nil {
 			klog.Errorf("Failed to update MCNC status: %v", updateErr)
 		}
-		return reconcile.Result{}, errors.Wrap(err, "failed to reconcile UserDefinedNetwork")
+		return reconcile.Result{}, errors.Wrap(err, "failed to reconcile MultiClusterNetwork")
+	}
+
+	// Step 3: Handle local network (CUDN or UDN)
+	cudnName, err := r.reconcileLocalNetwork(ctx, mcnc, mcn, ns)
+	if err != nil {
+		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
+		if updateErr := r.Status().Update(ctx, mcnc); updateErr != nil {
+			klog.Errorf("Failed to update MCNC status: %v", updateErr)
+		}
+		return reconcile.Result{}, errors.Wrap(err, "failed to reconcile local network")
+	}
+
+	// Step 4: Create RouteAdvertisement for BGP route advertisement
+	if err := r.RouteAdvCreator.CreateForCUDN(ctx, cudnName, mcn); err != nil {
+		klog.Errorf("RouteAdvertisement creation failed for CUDN %s: %v", cudnName, err)
+		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
+		if updateErr := r.Status().Update(ctx, mcnc); updateErr != nil {
+			klog.Errorf("Failed to update MCNC status: %v", updateErr)
+		}
+		return reconcile.Result{}, errors.Wrap(err, "failed to create RouteAdvertisement")
 	}
 
 	// Update status to connected
@@ -122,6 +143,72 @@ func (r *MCNCReconciler) reconcileMCNC(ctx context.Context, mcnc *skynetv1.Multi
 
 	klog.Infof("Successfully reconciled MCNC %s/%s", mcnc.Namespace, mcnc.Name)
 	return reconcile.Result{}, nil
+}
+
+// reconcileMCN gets or creates the MultiClusterNetwork on the broker
+func (r *MCNCReconciler) reconcileMCN(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (*skynetv1.MultiClusterNetwork, error) {
+	// Determine scenario: join existing or create new
+	var mcnName string
+	var topology skynetv1.NetworkTopology
+
+	if mcnc.Spec.MultiClusterNetworkName != "" {
+		// Join existing MCN
+		mcnName = mcnc.Spec.MultiClusterNetworkName
+		// Topology will be read from existing MCN
+		topology = "" // Will be ignored by CreateOrJoinMCN when MCN exists
+	} else if mcnc.Spec.CreateMultiClusterNetwork != nil {
+		// Create new MCN (or join if it already exists)
+		mcnName = mcnc.Spec.CreateMultiClusterNetwork.Name
+		topology = mcnc.Spec.CreateMultiClusterNetwork.Topology
+	} else {
+		return nil, fmt.Errorf("MCNC must specify either multiClusterNetworkName or createMultiClusterNetwork")
+	}
+
+	// Use MCNManager to create or join
+	// This handles: VNI allocation, finalizers, race conditions, etc.
+	mcn, err := r.MCNManager.CreateOrJoinMCN(ctx, mcnName, topology)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create/join MultiClusterNetwork %s", mcnName)
+	}
+
+	klog.Infof("Reconciled MultiClusterNetwork %s (VNI=%d, RT=%s, Topology=%s)",
+		mcnName, mcn.Spec.VNI, mcn.Spec.RouteTarget, mcn.Spec.Topology)
+	return mcn, nil
+}
+
+// reconcileLocalNetwork handles creating CUDN with EVPN or using existing CUDN
+// Returns the CUDN/UDN name
+func (r *MCNCReconciler) reconcileLocalNetwork(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect,
+	mcn *skynetv1.MultiClusterNetwork, ns *corev1.Namespace) (string, error) {
+
+	// Priority 1: LocalCUDN - patch existing CUDN with EVPN (preferred - user owns network definition)
+	if mcnc.Spec.LocalCUDN != "" {
+		cudnName := mcnc.Spec.LocalCUDN
+		klog.Infof("Patching existing CUDN %s with EVPN config (VNI=%d, RT=%s)",
+			cudnName, mcn.Spec.VNI, mcn.Spec.RouteTarget)
+
+		// Patch existing CUDN to add EVPN transport
+		if err := r.CUDNIntegrator.PatchCUDNWithEVPN(ctx, cudnName, mcn); err != nil {
+			return "", errors.Wrapf(err, "failed to patch CUDN %s with EVPN", cudnName)
+		}
+
+		return cudnName, nil
+	}
+
+	// Priority 2: CUDNSpec - SkyNet creates CUDN with EVPN (fallback - SkyNet owns network)
+	if mcnc.Spec.CUDNSpec != nil {
+		klog.Infof("Creating CUDN from cudnSpec with EVPN config")
+
+		cudnName, err := r.CUDNIntegrator.CreateCUDN(ctx, mcnc.Spec.CUDNSpec, mcn)
+		if err != nil {
+			return "", errors.Wrap(err, "failed to create CUDN with EVPN")
+		}
+
+		return cudnName, nil
+	}
+
+	// No CUDN spec provided - error
+	return "", fmt.Errorf("either localCUDN or cudnSpec must be specified")
 }
 
 // reconcileUserDefinedNetwork creates or updates the UserDefinedNetwork for a namespace
@@ -203,18 +290,48 @@ func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiC
 	// For deletion, we need to find the MCN name from the spec
 	mcnName := mcnc.Spec.MultiClusterNetworkName
 	if mcnName == "" {
-		// If name not set, we can't delete the UDN
+		// If name not set, nothing to clean up
 		return reconcile.Result{}, nil
 	}
 
-	// Delete the UserDefinedNetwork
-	udnName := fmt.Sprintf("skynet-%s", mcnName)
-	err := r.DynamicClient.Resource(UserDefinedNetworkGVR).Namespace(mcnc.Namespace).Delete(ctx, udnName, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return reconcile.Result{}, errors.Wrapf(err, "failed to delete UserDefinedNetwork %s", udnName)
+	// Determine the CUDN name
+	var cudnName string
+	if mcnc.Spec.CUDNSpec != nil {
+		// SkyNet created the CUDN - determine its name
+		cudnName = mcnc.Spec.CUDNSpec.Name
+		if cudnName == "" {
+			cudnName = mcnName
+		}
+	} else if mcnc.Spec.LocalCUDN != "" {
+		// User referenced existing CUDN (not supported in POC but handle gracefully)
+		cudnName = mcnc.Spec.LocalCUDN
+	} else {
+		// Fallback - shouldn't happen but handle gracefully
+		cudnName = mcnName
 	}
 
-	klog.Infof("Deleted UserDefinedNetwork %s from namespace %s", udnName, mcnc.Namespace)
+	// Step 1: Delete RouteAdvertisement
+	if err := r.RouteAdvCreator.DeleteForCUDN(ctx, cudnName); err != nil {
+		klog.Errorf("Failed to delete RouteAdvertisement for %s: %v", cudnName, err)
+		// Continue cleanup even if RouteAdvertisement deletion fails
+	}
+
+	// Step 2: Delete CUDN if SkyNet created it
+	if mcnc.Spec.CUDNSpec != nil {
+		// SkyNet created this CUDN - delete it
+		if err := r.CUDNIntegrator.DeleteCUDN(ctx, cudnName); err != nil {
+			klog.Errorf("Failed to delete CUDN %s: %v", cudnName, err)
+			// Continue cleanup even if CUDN deletion fails
+		}
+	}
+
+	// Step 3: Leave MCN (handled by MCN manager with finalizers)
+	if err := r.MCNManager.LeaveMCN(ctx, mcnName); err != nil {
+		klog.Errorf("Failed to leave MCN %s: %v", mcnName, err)
+		// Continue cleanup even if leave fails
+	}
+
+	klog.Infof("Successfully cleaned up MCNC %s/%s", mcnc.Namespace, mcnc.Name)
 	return reconcile.Result{}, nil
 }
 

@@ -37,8 +37,12 @@ import (
 	"github.com/submariner-io/admiral/pkg/util"
 	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
 	"github.com/aswinsuryana/skynet/pkg/agent"
+	"github.com/aswinsuryana/skynet/pkg/agent/allocator"
 	"github.com/aswinsuryana/skynet/pkg/agent/bootstrap"
 	"github.com/aswinsuryana/skynet/pkg/agent/controller"
+	"github.com/aswinsuryana/skynet/pkg/agent/cudn"
+	"github.com/aswinsuryana/skynet/pkg/agent/mcn"
+	"github.com/aswinsuryana/skynet/pkg/agent/routeadv"
 	"github.com/aswinsuryana/skynet/pkg/operator/alloc"
 )
 
@@ -118,17 +122,64 @@ func main() {
 		klog.Fatalf("Failed to create manager: %v", err)
 	}
 
-	// Setup MCNC controller
-	mcncReconciler := &controller.MCNCReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
+	// Initialize CUDN stretching components
+	klog.Info("Initializing CUDN stretching components")
+
+	// VNI Allocator - allocates VNI from range 5000-10000 on broker
+	vniAllocator := allocator.NewVNIAllocator(brokerClient, brokerNamespace, clusterID)
+
+	// MCN Manager - handles MultiClusterNetwork create/join/leave with finalizers
+	mcnManager, err := mcn.NewMCNManager(&mcn.Config{
+		BrokerClient: brokerClient,
+		BrokerNS:     brokerNamespace,
+		ClusterID:    clusterID,
+		VNIAllocator: vniAllocator,
+	})
+	if err != nil {
+		klog.Fatalf("Failed to create MCN manager: %v", err)
+	}
+
+	// CUDN Integrator - injects EVPN config into existing CUDNs
+	vtepName := "skynet-local" // Name of local VTEP CR created by agent
+	cudnIntegrator, err := cudn.NewCUDNIntegrator(&cudn.Config{
 		DynamicClient: localDynamicClient,
-		K8sClient:     localK8sClient,
-		ClusterID:     clusterID,
+		VTEPName:      vtepName,
+	})
+	if err != nil {
+		klog.Fatalf("Failed to create CUDN integrator: %v", err)
+	}
+
+	// RouteAdvertisement Creator - creates RouteAdvertisement CRs to trigger OVN-K FRRConfiguration generation
+	routeAdvCreator, err := routeadv.NewCreator(&routeadv.Config{
+		DynamicClient: localDynamicClient,
+		ClusterName:   clusterID,
+	})
+	if err != nil {
+		klog.Fatalf("Failed to create RouteAdvertisement creator: %v", err)
+	}
+
+	klog.Info("CUDN stretching components initialized successfully")
+
+	// Setup MCNC controller with all components
+	mcncReconciler := &controller.MCNCReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		DynamicClient:    localDynamicClient,
+		K8sClient:        localK8sClient,
+		ClusterID:        clusterID,
+		BrokerClient:     brokerClient,
+		BrokerNamespace:  brokerNamespace,
+		VTEPName:         vtepName,
+		VNIAllocator:     vniAllocator,
+		MCNManager:       mcnManager,
+		CUDNIntegrator:   cudnIntegrator,
+		RouteAdvCreator:  routeAdvCreator,
 	}
 	if err := mcncReconciler.SetupWithManager(mgr); err != nil {
 		klog.Fatalf("Failed to setup MCNC controller: %v", err)
 	}
+
+	klog.Info("MCNC controller configured with CUDN stretching support")
 
 	klog.Infof("Using operator allocation from env (%s, %s)",
 		bootstrap.EnvAllocatedVtepCIDR, bootstrap.EnvAllocatedASN)

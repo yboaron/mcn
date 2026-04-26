@@ -23,16 +23,19 @@ BROKER_CLUSTER="${CLUSTER1_NAME}"
 BROKER_NAMESPACE="skynet-broker"
 NUM_WORKERS="${NUM_WORKERS:-2}"
 
-# OVN-K Configuration with EVPN+FRR-K8s support
-# Using UPSTREAM ovn-org/ovn-kubernetes (all features now merged!)
-# Upstream already has:
+# OVN-K Configuration with EVPN+FRR-K8s support + SkyNet CUDN mutability patch
+# Using yboaron/ovn-kubernetes fork (skynet-evpn-base branch)
+# Based on upstream master with ONE additional commit:
+#   - Allow CUDN spec.network updates (removes immutability constraint)
+#   - Enables SkyNet to patch EVPN config into existing CUDNs
+# Upstream features included:
 # - FRR-K8s installation support (-rae flag, install_frr_k8s function)
 # - VTEP Controller (upstream PR #6078, merged Apr 8)
 # - EVPN Node Controller (upstream PR #5988, merged Apr 2)
 # - RouteAdvertisement CRDs
 # - EVPN enable flag (-evpn)
-OVNK_REPO="${OVNK_REPO:-https://github.com/ovn-org/ovn-kubernetes.git}"
-OVNK_BRANCH="${OVNK_BRANCH:-master}"
+OVNK_REPO="${OVNK_REPO:-https://github.com/yboaron/ovn-kubernetes.git}"
+OVNK_BRANCH="${OVNK_BRANCH:-skynet-evpn-base}"
 OVNK_COMMIT="${OVNK_COMMIT:-}"  # Optional: pin to specific commit (empty = use branch HEAD)
 OVNK_CLONE_DIR="/tmp/ovn-kubernetes-skynet-$$"
 

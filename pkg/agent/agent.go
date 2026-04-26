@@ -183,6 +183,7 @@ func (a *Agent) initRuntimeComponents() error {
 		BrokerNS:     a.brokerNS,
 		ClusterID:    a.clusterID,
 		LocalASN:     a.cluster.Spec.ASN,
+		VtepCIDR:     a.cluster.Spec.VtepCIDR,
 		Topology:     bgp.TopologyFullMesh, // Default to full mesh
 	}
 	a.bgpConfigurator, err = bgp.NewBGPConfigurator(bgpConfig)

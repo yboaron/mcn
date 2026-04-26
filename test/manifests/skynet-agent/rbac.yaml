@@ -16,7 +16,7 @@ rules:
     resources: ["*"]
     verbs: ["*"]
   - apiGroups: ["k8s.ovn.org"]
-    resources: ["vteps", "userdefinednetworks"]
+    resources: ["vteps", "userdefinednetworks", "clusteruserdefinednetworks", "routeadvertisements"]
     verbs: ["*"]
   - apiGroups: ["frrk8s.metallb.io"]
     resources: ["frrconfigurations"]
