@@ -62,11 +62,28 @@ make cleanup-cudn
 
 The SkyNet agent runs in each cluster and handles:
 - **MCNC Controller**: Reconciles MultiClusterNetworkConnect resources
-- **CUDN Integrator**: Creates CUDNs with EVPN configuration (VNI, RouteTarget)
+- **CUDN Integrator**: Patches EVPN config into user-created CUDNs or creates new CUDNs
 - **RouteAdvertisement Creator**: Triggers OVN-K BGP route advertisement
 - **MCN Manager**: Manages MultiClusterNetwork lifecycle on broker
 - **VNI Allocator**: Allocates unique VNI (5000-10000) per network
 - **BGP Configurator**: Generates per-node FRRConfiguration for BGP mesh
+
+## Workarounds (POC/Dev Preview)
+
+This implementation includes temporary workarounds for upstream gaps:
+
+1. **OVN-K fork required**: Uses `yboaron/ovn-kubernetes:skynet-evpn-base`
+   - Removes CUDN `spec.network` immutability to allow EVPN patching
+   - Fixes node subnet annotation during network Sync()
+   - Will be upstreamed to OVN-Kubernetes
+
+2. **FRR BGP listening address**: FRR-K8s configured to listen on `0.0.0.0` instead of `127.0.0.1`
+   - Required for BGP peering between Kind container nodes
+   - Production deployments use node IPs directly
+
+3. **VTEP IP assignment**: Setup script manually assigns VTEP IPs to node loopback
+   - OVN-K VTEP controller `Managed` mode not yet implemented upstream
+   - Uses `Unmanaged` mode with pre-configured IPs
 
 ## License
 
