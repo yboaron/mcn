@@ -230,22 +230,37 @@ wait_for_pod_ips() {
     kubectl wait --for=condition=ready pod/cudn-test-pod -n tenant-skynet-demo --timeout=120s
 
     # Get UDN IP from OVN annotations (more reliable than .status.podIP)
-    # The annotation format is: {"tenant-skynet-demo/tenant-network-l3":{"ip_addresses":["10.200.x.x/16"]}}
+    # The annotation format is: {"tenant-skynet-demo/demo-mcn-l3":{"ip_addresses":["10.100.x.x/23"],"role":"primary"}}
     POD1_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo \
         -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/pod-networks}' 2>/dev/null | \
-        grep -oP '"tenant-skynet-demo/tenant-network-l3":\{"ip_addresses":\["\K[^"]+' | cut -d'/' -f1 || echo "")
+        jq -r '.["tenant-skynet-demo/demo-mcn-l3"].ip_address // empty' | cut -d'/' -f1 2>/dev/null || echo "")
 
     # Fallback to .status.podIP if annotation not found
     if [ -z "$POD1_IP" ]; then
         POD1_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo -o jsonpath='{.status.podIP}')
-        log_warn "Using .status.podIP (annotation not found)"
+        log_warn "Using .status.podIP (CUDN annotation not found)"
     fi
 
-    if [[ "$POD1_IP" =~ ^10\.100\. ]]; then
-        log_info "✓ Cluster1 pod IP: $POD1_IP (from CUDN subnet 10.100.0.0/16)"
-    else
-        log_warn "Cluster1 pod IP: $POD1_IP (expected 10.100.x.x)"
+    # Verify pod IP is from CUDN subnet (10.100.0.0/16)
+    if [[ ! "$POD1_IP" =~ ^10\.100\. ]]; then
+        log_error "Cluster1 pod IP ($POD1_IP) is NOT from CUDN subnet 10.100.0.0/16"
+        echo ""
+        log_error "Pod did not get IP from CUDN - this indicates CUDN is not working as primary network"
+        log_error "Possible causes:"
+        log_error "  1. Namespace label 'k8s.ovn.org/primary-user-defined-network' not set correctly"
+        log_error "  2. CUDN not in NetworkCreated status"
+        log_error "  3. Pod created before CUDN was ready"
+        echo ""
+        log_error "Debug commands:"
+        echo "  kubectl get namespace tenant-skynet-demo -o yaml | grep labels -A5"
+        echo "  kubectl get cudn demo-mcn-l3 -o yaml | grep conditions -A20"
+        echo "  kubectl get pod -n tenant-skynet-demo cudn-test-pod -o yaml | grep 'k8s.ovn.org/pod-networks' -A5"
+        exit 1
     fi
+
+    # Get the actual allocated subnet for this node from CUDN
+    NODE_SUBNET=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.status.subnets[?(@.node)].subnet}' 2>/dev/null | head -n1)
+    log_info "✓ Cluster1 pod IP: $POD1_IP (from CUDN subnet 10.100.0.0/16, node subnet: ${NODE_SUBNET:-checking...})"
 
     # Wait for cluster2 pod
     export KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster2.yaml"
@@ -255,19 +270,34 @@ wait_for_pod_ips() {
     # Get UDN IP from OVN annotations
     POD2_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo \
         -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/pod-networks}' 2>/dev/null | \
-        grep -oP '"tenant-skynet-demo/tenant-network-l3":\{"ip_addresses":\["\K[^"]+' | cut -d'/' -f1 || echo "")
+        jq -r '.["tenant-skynet-demo/demo-mcn-l3"].ip_address // empty' | cut -d'/' -f1 2>/dev/null || echo "")
 
     # Fallback to .status.podIP
     if [ -z "$POD2_IP" ]; then
         POD2_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo -o jsonpath='{.status.podIP}')
-        log_warn "Using .status.podIP (annotation not found)"
+        log_warn "Using .status.podIP (CUDN annotation not found)"
     fi
 
-    if [[ "$POD2_IP" =~ ^10\.200\. ]]; then
-        log_info "✓ Cluster2 pod IP: $POD2_IP (from CUDN subnet 10.200.0.0/16)"
-    else
-        log_warn "Cluster2 pod IP: $POD2_IP (expected 10.200.x.x)"
+    # Verify pod IP is from CUDN subnet (10.200.0.0/16)
+    if [[ ! "$POD2_IP" =~ ^10\.200\. ]]; then
+        log_error "Cluster2 pod IP ($POD2_IP) is NOT from CUDN subnet 10.200.0.0/16"
+        echo ""
+        log_error "Pod did not get IP from CUDN - this indicates CUDN is not working as primary network"
+        log_error "Possible causes:"
+        log_error "  1. Namespace label 'k8s.ovn.org/primary-user-defined-network' not set correctly"
+        log_error "  2. CUDN not in NetworkCreated status"
+        log_error "  3. Pod created before CUDN was ready"
+        echo ""
+        log_error "Debug commands:"
+        echo "  kubectl get namespace tenant-skynet-demo -o yaml | grep labels -A5"
+        echo "  kubectl get cudn demo-mcn-l3 -o yaml | grep conditions -A20"
+        echo "  kubectl get pod -n tenant-skynet-demo cudn-test-pod -o yaml | grep 'k8s.ovn.org/pod-networks' -A5"
+        exit 1
     fi
+
+    # Get the actual allocated subnet for this node from CUDN
+    NODE_SUBNET=$(kubectl get cudn demo-mcn-l3 -o jsonpath='{.status.subnets[?(@.node)].subnet}' 2>/dev/null | head -n1)
+    log_info "✓ Cluster2 pod IP: $POD2_IP (from CUDN subnet 10.200.0.0/16, node subnet: ${NODE_SUBNET:-checking...})"
 
     echo ""
     log_info "Pod IPs from CUDN subnets:"
@@ -334,8 +364,8 @@ verify_agent_work() {
     fi
 
     # Check MCN on broker
-    MCN_VNI=$(kubectl get mcn -n skynet-broker demo-mcn-l3 -o jsonpath='{.spec.vni}' 2>/dev/null || echo "")
-    MCN_RT=$(kubectl get mcn -n skynet-broker demo-mcn-l3 -o jsonpath='{.spec.routeTarget}' 2>/dev/null || echo "")
+    MCN_VNI=$(kubectl get multiclusternetworks -n skynet-broker demo-mcn-l3 -o jsonpath='{.spec.vni}' 2>/dev/null || echo "")
+    MCN_RT=$(kubectl get multiclusternetworks -n skynet-broker demo-mcn-l3 -o jsonpath='{.spec.routeTarget}' 2>/dev/null || echo "")
     if [ -n "$MCN_VNI" ]; then
         log_info "✓ MCN on broker: VNI=$MCN_VNI, RT=$MCN_RT"
     else
@@ -392,12 +422,26 @@ verify_agent_work() {
 test_connectivity() {
     log_step "Step 4: Testing cross-cluster connectivity via CUDN..."
 
-    # Get pod IPs
+    # Get CUDN IPs from pod annotations (NOT .status.podIP which is default network)
     export KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster1.yaml"
-    POD1_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo -o jsonpath='{.status.podIP}')
+    POD1_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo \
+        -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/pod-networks}' 2>/dev/null | \
+        jq -r '.["tenant-skynet-demo/demo-mcn-l3"].ip_address // empty' | cut -d'/' -f1 2>/dev/null || echo "")
 
     export KUBECONFIG="${PROJECT_ROOT}/output/kubeconfig-cluster2.yaml"
-    POD2_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo -o jsonpath='{.status.podIP}')
+    POD2_IP=$(kubectl get pod cudn-test-pod -n tenant-skynet-demo \
+        -o jsonpath='{.metadata.annotations.k8s\.ovn\.org/pod-networks}' 2>/dev/null | \
+        jq -r '.["tenant-skynet-demo/demo-mcn-l3"].ip_address // empty' | cut -d'/' -f1 2>/dev/null || echo "")
+
+    # Validate we got CUDN IPs (not default network IPs)
+    if [[ ! "$POD1_IP" =~ ^10\.100\. ]]; then
+        log_error "Failed to get CUDN IP for cluster1 pod (got: $POD1_IP, expected 10.100.x.x)"
+        return 1
+    fi
+    if [[ ! "$POD2_IP" =~ ^10\.200\. ]]; then
+        log_error "Failed to get CUDN IP for cluster2 pod (got: $POD2_IP, expected 10.200.x.x)"
+        return 1
+    fi
 
     echo ""
     log_info "Testing connectivity between:"

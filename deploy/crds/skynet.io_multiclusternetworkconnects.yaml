@@ -11,6 +11,8 @@ spec:
     kind: MultiClusterNetworkConnect
     listKind: MultiClusterNetworkConnectList
     plural: multiclusternetworkconnects
+    shortNames:
+    - mcnc
     singular: multiclusternetworkconnect
   scope: Namespaced
   versions:

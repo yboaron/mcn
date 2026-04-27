@@ -85,6 +85,11 @@ This implementation includes temporary workarounds for upstream gaps:
    - OVN-K VTEP controller `Managed` mode not yet implemented upstream
    - Uses `Unmanaged` mode with pre-configured IPs
 
+4. **VNI allocation race condition**: Kubernetes optimistic locking prevents conflicts for same MCN name
+   - Theoretical race exists when creating different MCN names simultaneously across clusters
+   - Both agents could allocate the same VNI for different networks, causing route leakage
+   - Production solution: VNI range partitioning per cluster or broker-side locking
+
 ## License
 
 _(To be added)_

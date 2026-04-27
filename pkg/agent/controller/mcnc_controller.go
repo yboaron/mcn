@@ -68,9 +68,13 @@ type MCNCReconciler struct {
 	RouteAdvCreator  *routeadv.Creator
 }
 
+const (
+	mcncFinalizerName = "skynet.io/mcnc-cleanup"
+)
+
 // Reconcile handles MultiClusterNetworkConnect events
 func (r *MCNCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	klog.V(2).Infof("Reconciling MultiClusterNetworkConnect %s/%s", req.Namespace, req.Name)
+	klog.Infof("Reconciling MultiClusterNetworkConnect %s/%s", req.Namespace, req.Name)
 
 	// Fetch the MultiClusterNetworkConnect
 	mcnc := &skynetv1.MultiClusterNetworkConnect{}
@@ -84,7 +88,18 @@ func (r *MCNCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	// Check if the MCNC is being deleted
 	if !mcnc.DeletionTimestamp.IsZero() {
+		klog.Infof("MCNC %s/%s has deletionTimestamp, triggering cleanup", mcnc.Namespace, mcnc.Name)
 		return r.handleDelete(ctx, mcnc)
+	}
+
+	// Add finalizer if not present
+	if !containsString(mcnc.Finalizers, mcncFinalizerName) {
+		mcnc.Finalizers = append(mcnc.Finalizers, mcncFinalizerName)
+		if err := r.Update(ctx, mcnc); err != nil {
+			return reconcile.Result{}, errors.Wrap(err, "failed to add finalizer to MCNC")
+		}
+		klog.V(2).Infof("Added finalizer to MCNC %s/%s", mcnc.Namespace, mcnc.Name)
+		return reconcile.Result{Requeue: true}, nil
 	}
 
 	// Reconcile the MCNC
@@ -93,7 +108,11 @@ func (r *MCNCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 // reconcileMCNC reconciles a MultiClusterNetworkConnect
 func (r *MCNCReconciler) reconcileMCNC(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
-	klog.V(2).Infof("Reconciling MCNC %s/%s for MCN %s", mcnc.Namespace, mcnc.Name, mcnc.Spec.MultiClusterNetworkName)
+	mcnName := ""
+	if mcnc.Spec.CreateMultiClusterNetwork != nil {
+		mcnName = mcnc.Spec.CreateMultiClusterNetwork.Name
+	}
+	klog.V(2).Infof("Reconciling MCNC %s/%s for MCN %s", mcnc.Namespace, mcnc.Name, mcnName)
 
 	// Step 1: Verify namespace exists
 	ns, err := r.K8sClient.CoreV1().Namespaces().Get(ctx, mcnc.Namespace, metav1.GetOptions{})
@@ -288,9 +307,23 @@ func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiC
 	klog.Infof("Handling deletion of MCNC %s/%s", mcnc.Namespace, mcnc.Name)
 
 	// For deletion, we need to find the MCN name from the spec
-	mcnName := mcnc.Spec.MultiClusterNetworkName
+	var mcnName string
+	if mcnc.Spec.CreateMultiClusterNetwork != nil {
+		mcnName = mcnc.Spec.CreateMultiClusterNetwork.Name
+	} else if mcnc.Spec.MultiClusterNetworkName != "" {
+		mcnName = mcnc.Spec.MultiClusterNetworkName
+	}
+
 	if mcnName == "" {
 		// If name not set, nothing to clean up
+		klog.Warningf("MCNC %s/%s has no MCN name, skipping cleanup", mcnc.Namespace, mcnc.Name)
+		// Still remove finalizer to allow deletion
+		if containsString(mcnc.Finalizers, mcncFinalizerName) {
+			mcnc.Finalizers = removeString(mcnc.Finalizers, mcncFinalizerName)
+			if err := r.Update(ctx, mcnc); err != nil {
+				return reconcile.Result{}, errors.Wrap(err, "failed to remove finalizer from MCNC")
+			}
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -331,13 +364,47 @@ func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiC
 		// Continue cleanup even if leave fails
 	}
 
+	// Step 4: Remove finalizer from MCNC to allow deletion
+	if containsString(mcnc.Finalizers, mcncFinalizerName) {
+		mcnc.Finalizers = removeString(mcnc.Finalizers, mcncFinalizerName)
+		if err := r.Update(ctx, mcnc); err != nil {
+			return reconcile.Result{}, errors.Wrap(err, "failed to remove finalizer from MCNC")
+		}
+		klog.V(2).Infof("Removed finalizer from MCNC %s/%s", mcnc.Namespace, mcnc.Name)
+	}
+
 	klog.Infof("Successfully cleaned up MCNC %s/%s", mcnc.Namespace, mcnc.Name)
 	return reconcile.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager
 func (r *MCNCReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Note: For() automatically watches Create, Update, and Delete events
+	// This includes deletionTimestamp changes
+	// Previously, handleDelete failed silently due to wrong field name
+	// Now fixed to read from CreateMultiClusterNetwork.Name
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&skynetv1.MultiClusterNetworkConnect{}).
 		Complete(r)
+}
+
+// containsString checks if a string is in a slice
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+// removeString removes a string from a slice
+func removeString(slice []string, s string) []string {
+	result := []string{}
+	for _, item := range slice {
+		if item != s {
+			result = append(result, item)
+		}
+	}
+	return result
 }

@@ -240,9 +240,8 @@ type ClusterList struct {
 }
 
 // +genclient
-// +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:resource:scope=Namespaced,shortName=mcn
 
 // MultiClusterNetwork represents a multi-cluster network across clusters.
 // Created and managed on the broker.
@@ -289,7 +288,7 @@ type MultiClusterNetworkList struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:resource:scope=Namespaced,shortName=mcnc
 
 // MultiClusterNetworkConnect is applied locally to connect a CUDN to a multi-cluster network.
 // SkyNet agent watches this CR and handles the connection.

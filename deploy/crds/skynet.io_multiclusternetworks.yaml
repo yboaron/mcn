@@ -11,6 +11,8 @@ spec:
     kind: MultiClusterNetwork
     listKind: MultiClusterNetworkList
     plural: multiclusternetworks
+    shortNames:
+    - mcn
     singular: multiclusternetwork
   scope: Namespaced
   versions:
