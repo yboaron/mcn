@@ -107,7 +107,9 @@ func (m *VtepManager) EnsureLocalVTEP(ctx context.Context) error {
 				// CIDRs is the list of IP ranges from which VTEP IPs are discovered
 				"cidrs": []string{m.vtepCIDR},
 				// Mode: "Unmanaged" because OVN-K Managed mode is not yet implemented
-				// (commit 357e39d5: "temporary till we add support for managed VTEPs")
+				// OVN-K upstream temporarily disabled Managed mode (commit 357e39d5):
+				// https://github.com/ovn-org/ovn-kubernetes/commit/357e39d57dcb3974a06580b57cfba94cc488e304
+				// Message: "This is temporary till we add support for managed VTEPs which will be a FUP PR."
 				// VTEP IPs are assigned by setup script to node loopback interfaces
 				// TODO: Switch to Managed when OVN-K implements automatic allocation
 				"mode": VTEPModeUnmanaged,
