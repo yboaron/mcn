@@ -1,4 +1,4 @@
-module github.com/aswinsuryana/skynet
+module github.com/yboaron/mcn
 
 go 1.25.0
 

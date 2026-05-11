@@ -20,7 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
 )
 
 func reconcileBrokerTokenSecret(ctx context.Context, c client.Client, scheme *runtime.Scheme, sk *skynetv1.Skynet) error {

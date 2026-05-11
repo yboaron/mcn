@@ -16,7 +16,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
 )
 
 // VtepAllocator picks an unused /N subnet from the configured VTEP pool on the broker.

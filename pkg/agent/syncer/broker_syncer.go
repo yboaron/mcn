@@ -31,7 +31,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
 )
 
 // BrokerSyncer handles synchronization of resources between local cluster and broker

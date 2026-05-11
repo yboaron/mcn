@@ -29,9 +29,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
-	"github.com/aswinsuryana/skynet/pkg/names"
-	"github.com/aswinsuryana/skynet/pkg/operator/alloc"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
+	"github.com/yboaron/mcn/pkg/names"
+	"github.com/yboaron/mcn/pkg/operator/alloc"
 )
 
 // Reconciler watches Skynet CRs and reconciles broker credentials, allocation, status, and agent Deployment.

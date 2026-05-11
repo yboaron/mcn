@@ -36,11 +36,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
-	"github.com/aswinsuryana/skynet/pkg/agent/allocator"
-	"github.com/aswinsuryana/skynet/pkg/agent/cudn"
-	"github.com/aswinsuryana/skynet/pkg/agent/mcn"
-	"github.com/aswinsuryana/skynet/pkg/agent/routeadv"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
+	"github.com/yboaron/mcn/pkg/agent/allocator"
+	"github.com/yboaron/mcn/pkg/agent/cudn"
+	"github.com/yboaron/mcn/pkg/agent/mcn"
+	"github.com/yboaron/mcn/pkg/agent/routeadv"
 )
 
 var (

@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
 )
 
 // EndpointReporter collects node information and reports endpoints

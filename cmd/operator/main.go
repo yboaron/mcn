@@ -41,9 +41,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/submariner-io/admiral/pkg/log/kzerolog"
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
-	"github.com/aswinsuryana/skynet/pkg/names"
-	skynetctrl "github.com/aswinsuryana/skynet/pkg/operator/skynet"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
+	"github.com/yboaron/mcn/pkg/names"
+	skynetctrl "github.com/yboaron/mcn/pkg/operator/skynet"
 )
 
 var log = logf.Log.WithName("skynet-operator")

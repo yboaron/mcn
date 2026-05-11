@@ -35,13 +35,13 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
-	"github.com/aswinsuryana/skynet/pkg/agent/bootstrap"
-	"github.com/aswinsuryana/skynet/pkg/agent/bgp"
-	"github.com/aswinsuryana/skynet/pkg/agent/endpoint"
-	"github.com/aswinsuryana/skynet/pkg/agent/syncer"
-	"github.com/aswinsuryana/skynet/pkg/agent/vtep"
-	"github.com/aswinsuryana/skynet/pkg/operator/alloc"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
+	"github.com/yboaron/mcn/pkg/agent/bootstrap"
+	"github.com/yboaron/mcn/pkg/agent/bgp"
+	"github.com/yboaron/mcn/pkg/agent/endpoint"
+	"github.com/yboaron/mcn/pkg/agent/syncer"
+	"github.com/yboaron/mcn/pkg/agent/vtep"
+	"github.com/yboaron/mcn/pkg/operator/alloc"
 )
 
 const (

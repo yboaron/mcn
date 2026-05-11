@@ -35,15 +35,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/submariner-io/admiral/pkg/util"
-	skynetv1 "github.com/aswinsuryana/skynet/pkg/apis/skynet.io/v1"
-	"github.com/aswinsuryana/skynet/pkg/agent"
-	"github.com/aswinsuryana/skynet/pkg/agent/allocator"
-	"github.com/aswinsuryana/skynet/pkg/agent/bootstrap"
-	"github.com/aswinsuryana/skynet/pkg/agent/controller"
-	"github.com/aswinsuryana/skynet/pkg/agent/cudn"
-	"github.com/aswinsuryana/skynet/pkg/agent/mcn"
-	"github.com/aswinsuryana/skynet/pkg/agent/routeadv"
-	"github.com/aswinsuryana/skynet/pkg/operator/alloc"
+	skynetv1 "github.com/yboaron/mcn/pkg/apis/skynet.io/v1"
+	"github.com/yboaron/mcn/pkg/agent"
+	"github.com/yboaron/mcn/pkg/agent/allocator"
+	"github.com/yboaron/mcn/pkg/agent/bootstrap"
+	"github.com/yboaron/mcn/pkg/agent/controller"
+	"github.com/yboaron/mcn/pkg/agent/cudn"
+	"github.com/yboaron/mcn/pkg/agent/mcn"
+	"github.com/yboaron/mcn/pkg/agent/routeadv"
+	"github.com/yboaron/mcn/pkg/operator/alloc"
 )
 
 func main() {
