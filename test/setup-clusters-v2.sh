@@ -482,7 +482,7 @@ rules:
   resources: ["multiclusternetworkconnects/status"]
   verbs: ["get", "update", "patch"]
 - apiGroups: ["k8s.ovn.org"]
-  resources: ["vteps", "userdefinednetworks"]
+  resources: ["vteps", "userdefinednetworks", "routeadvertisements"]
   verbs: ["*"]
 - apiGroups: ["k8s.ovn.org"]
   resources: ["clusteruserdefinednetworks"]
