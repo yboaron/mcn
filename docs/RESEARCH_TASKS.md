@@ -10,22 +10,25 @@
 
 | # | Task | Priority | Status | Owner | Due Date |
 |---|------|----------|--------|-------|----------|
-| 1 | CUDN Transport Types Analysis | 🔴 High | 🔄 Not Started | - | 2026-05-19 |
+| 1 | CUDN Types & Topology Analysis | 🔴 High | 🔄 Not Started | - | 2026-05-16 |
 | 2 | GRE Hardware Offload Research | 🟡 Medium | 🔄 Not Started | - | 2026-05-22 |
-| 3 | KubeVirt Migration API Research | 🔴 High | 🔄 Not Started | - | 2026-05-20 |
+| 3 | KubeVirt Migration API Research | 🔴 High | 🔄 Not Started | - | 2026-05-23 |
 | 4 | OVN-K Managed VTEP Status | 🟢 Low | 🔄 Not Started | - | 2026-05-26 |
 | 5 | Route Reflector Topology Design | 🟡 Medium | 🔄 Not Started | - | 2026-05-24 |
 | 6 | EVPN Type-2 Routes (L2) Validation | 🟡 Medium | 🔄 Not Started | - | 2026-05-24 |
-| 7 | IPAM Controller Design | 🔴 High | 🔄 Not Started | - | 2026-05-21 |
+| 7 | IPAM Controller Design | 🔴 High | 🔄 Not Started | - | 2026-05-19 |
+| 8 | Cloud Platform Support | 🔴 High | 🔄 Not Started | - | 2026-05-25 |
 
 ---
 
-## Task 1: CUDN Transport Types Analysis 🔴 **HIGH PRIORITY**
+## Task 1: CUDN Types & Topology Analysis 🔴 **HIGH PRIORITY**
 
 ### Goal
-Understand all CUDN topology types and how MCN can stretch each across clusters.
+Understand all CUDN types (L2/L3, Primary/Secondary) and topology types (layer2/layer3/localnet), and how MCN can stretch each across clusters.
 
 ### Questions to Answer
+
+**Topology Types:**
 1. **What topology types does CUDN support?**
    - `localnet` - What is it? How does it work?
    - `layer2` - L2 switching, EVPN Type-2 routes
@@ -47,6 +50,33 @@ Understand all CUDN topology types and how MCN can stretch each across clusters.
    - layer3: EVPN Type-5 (IP prefix routes), GRE L3
    - layer2: EVPN Type-2 (MAC/IP routes), GRE L2, needs broadcast/multicast handling
    - localnet: ❓ Research needed
+
+**CUDN Types (L2 vs L3):**
+5. **What's the difference between L2 and L3 CUDNs?**
+   - L2: Same broadcast domain, ARP works across clusters, MAC learning
+   - L3: Routed connectivity, different broadcast domains per cluster
+
+6. **When should we use L2 vs L3?**
+   - L2 use cases: VM migration (L2 adjacency needed), legacy apps expecting broadcast
+   - L3 use cases: Most modern microservices, better scalability
+
+7. **Can we stretch both L2 and L3 CUDNs?**
+   - L3: ✅ Working in PoC (layer3 topology)
+   - L2: ❓ Need to validate EVPN Type-2 support
+
+**CUDN Types (Primary vs Secondary):**
+8. **What's `spec.network.role`?**
+   - Primary: Can it be the default pod network? Security implications?
+   - Secondary: Attached via Multus (standard for CUDNs)
+
+9. **Can we stretch both Primary and Secondary networks?**
+   - Secondary: ✅ Standard use case (Multus multi-network)
+   - Primary: ❓ Security concerns (cross-cluster default network)
+
+10. **Are there security implications for stretching Primary networks?**
+    - Pods on default network across clusters can communicate
+    - NetworkPolicy enforcement across clusters?
+    - Recommendation: Support Secondary only initially?
 
 ### Methodology
 1. **Read OVN-K documentation:**
@@ -79,9 +109,19 @@ Understand all CUDN topology types and how MCN can stretch each across clusters.
 
 ### Deliverables
 - [ ] `docs/CUDN_TOPOLOGY_ANALYSIS.md` document
-- [ ] Topology support matrix table
-- [ ] Recommendations for Phase 1/2/3 support
-- [ ] Test YAML examples for each topology
+  - Topology support matrix table (layer2/layer3/localnet)
+  - OVN implementation details
+  - Stretching feasibility
+  - Transport requirements (EVPN Type-2/Type-5, GRE L2/L3)
+  - Recommendations for Phase 1/2/3 support
+
+- [ ] `docs/CUDN_TYPES_ANALYSIS.md` document
+  - L2 vs L3 comparison and use cases
+  - Primary vs Secondary network analysis
+  - Security implications
+  - Support matrix for Phase 1/2/3
+
+- [ ] Test YAML examples for each topology and type
 
 ### Status
 🔄 **Not Started**
@@ -583,19 +623,96 @@ Design broker-side IPAM controller for allocating non-overlapping CIDRs across c
 
 ---
 
+## Task 8: Cloud Platform Support 🔴 **HIGH PRIORITY**
+
+### Goal
+Investigate stretching CUDNs across different cloud platforms (AWS, GCP, Azure, on-premises).
+
+### Questions to Answer
+1. **Can MCN stretch CUDNs when clusters run on different cloud providers?**
+   - Example: Cluster1 on AWS EKS, Cluster2 on GCP GKE
+   - Example: Cluster1 on Azure AKS, Cluster2 on on-premises datacenter
+   - What networking challenges exist?
+
+2. **What connectivity options are available?**
+   - **VPN Tunnels:** AWS VPN ↔ GCP VPN, Azure VPN Gateway
+   - **Cloud Interconnects:** AWS Direct Connect ↔ GCP Cloud Interconnect, Azure ExpressRoute
+   - **Public Internet:** Nodes with public IPs (security concerns)
+
+3. **Cloud-specific networking requirements:**
+   - **AWS:** Security groups for BGP (TCP 179), VXLAN (UDP 4789), GRE (Protocol 47)
+   - **GCP:** Firewall rules for BGP, VXLAN, GRE
+   - **Azure:** Network Security Groups (NSGs) for MCN traffic
+
+4. **IP addressing challenges:**
+   - Can clouds allow custom VTEP IPs (100.0.0.0/8)?
+   - Overlapping VPC CIDRs between clouds?
+   - Public vs private IPs for BGP peering endpoints?
+
+5. **Performance and cost:**
+   - Expected latency (AWS us-east ↔ GCP us-central: ~20-30ms)
+   - MTU considerations (VPN overhead + VXLAN/GRE)
+   - Inter-cloud data transfer costs ($0.01-0.09/GB)
+
+### Method
+1. **Research cloud networking:**
+   - AWS: VPN Gateway, Transit Gateway, Direct Connect, Security Groups
+   - GCP: Cloud VPN, Cloud Interconnect, Cloud Router, Firewall Rules
+   - Azure: VPN Gateway, ExpressRoute, Virtual WAN, NSGs
+   - Review multi-cloud networking patterns (Aviatrix, service mesh)
+
+2. **Document connectivity options:**
+   - VPN tunnel setup between AWS and GCP
+   - Security group / firewall rule requirements
+   - MTU calculations (VPN overhead + encapsulation)
+   - Latency expectations for common cloud pairs
+
+3. **Create support matrix:**
+   - Which cloud combinations are feasible?
+   - Recommended connectivity method for each
+   - Known limitations and workarounds
+   - Cost implications
+
+4. **Design test plan:**
+   - Test scenarios for AWS + GCP
+   - Test scenarios for On-prem + Cloud
+   - Security considerations (IPsec overlay?)
+
+### Deliverables
+- [ ] `docs/CLOUD_PLATFORM_NETWORKING.md` document
+  - Multi-cloud connectivity options
+  - Security group / firewall requirements per cloud
+  - VPN tunnel setup guide
+  - MTU and latency considerations
+  - Cost analysis
+
+- [ ] `docs/CLOUD_PLATFORM_SUPPORT_MATRIX.md` document
+  - Cloud combination support matrix
+  - Recommended connectivity per combination
+  - Known limitations and challenges
+  - Phase 1/2/3 support roadmap
+
+- [ ] Test plan for multi-cloud validation (Phase 2)
+
+### Status
+🔄 **Not Started**
+
+---
+
 ## Summary Table
 
 | Task | Priority | Complexity | Estimated Time | Dependencies |
 |------|----------|------------|----------------|--------------|
-| 1. CUDN Topology Analysis | 🔴 High | Medium | 3 days | None |
+| 1. CUDN Types & Topology | 🔴 High | Medium | 4 days | None |
 | 2. GRE Offload Research | 🟡 Medium | Medium | 4 days | None |
 | 3. KubeVirt Integration | 🔴 High | High | 5 days | None |
 | 4. Managed VTEP Status | 🟢 Low | Low | 1 day | None |
 | 5. Route Reflector Design | 🟡 Medium | Medium | 3 days | Task 1 |
 | 6. EVPN Type-2 Validation | 🟡 Medium | Medium | 2 days | Task 1 |
-| 7. IPAM Controller Design | 🔴 High | High | 4 days | None |
+| 7. IPAM Controller Design | 🔴 High | High | 3 days | None |
+| 8. Cloud Platform Support | 🔴 High | Medium | 2 days | None |
 
-**Total Estimated Time:** ~22 days (3-4 weeks with parallel work)
+**Total Estimated Time:** ~24 days (3-4 weeks with parallel work)
 
 ---
 
