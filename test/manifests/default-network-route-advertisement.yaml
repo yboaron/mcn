@@ -1,0 +1,24 @@
+apiVersion: k8s.ovn.org/v1
+kind: RouteAdvertisements
+metadata:
+  name: default-network-pod-routes
+  namespace: default
+spec:
+  # Advertise pod network (pod CIDRs)
+  advertisements:
+    - PodNetwork
+
+  # Select the default network
+  networkSelectors:
+    - networkSelectionType: DefaultNetwork
+
+  # Match all FRRConfiguration resources created by SkyNet agent
+  # The SkyNet agent creates per-node FRRConfigurations in frr-k8s-system namespace
+  frrConfigurationSelector:
+    matchLabels:
+      skynet.io/config-type: per-node
+
+  # Empty nodeSelector means all nodes (required field but empty selects all)
+  # PodNetwork must be advertised on all nodes
+  # This ensures each node advertises its local pod CIDR subnet via BGP
+  nodeSelector: {}

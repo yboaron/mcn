@@ -15,6 +15,10 @@ help:
 	@echo '  make clean         — delete kind clusters + test artifacts (test/cleanup.sh)'
 	@echo '  make verify-bgp    — after deploy: agents, broker Cluster CRs, VTEP, FRR, BGP mesh checks'
 	@echo ''
+	@echo 'Default Network Tests:'
+	@echo '  make test-default-network  — test default network pod connectivity across clusters via RouteAdvertisement'
+	@echo '  make cleanup-default       — cleanup default network test resources'
+	@echo ''
 	@echo 'CUDN Stretching Tests:'
 	@echo '  make test-cudn-l3  — test Layer3 CUDN stretching across clusters'
 	@echo '  make cleanup-cudn  — cleanup CUDN test resources'
@@ -90,3 +94,20 @@ test-cudn-l3:
 .PHONY: cleanup-cudn
 cleanup-cudn:
 	cd test && ./cleanup-cudn-test.sh
+
+.PHONY: test-default-network
+test-default-network:
+	@echo ""
+	@echo "Running default network connectivity test..."
+	@echo "This will:"
+	@echo "  1. Verify non-overlapping pod CIDRs"
+	@echo "  2. Apply RouteAdvertisement CR to both clusters"
+	@echo "  3. Create test pods on default network"
+	@echo "  4. Verify BGP route propagation"
+	@echo "  5. Test cross-cluster pod-to-pod connectivity"
+	@echo ""
+	cd test && ./test-default-network.sh
+
+.PHONY: cleanup-default
+cleanup-default:
+	cd test && ./cleanup-default-network.sh
