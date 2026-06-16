@@ -244,6 +244,7 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER1_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
+        NET_CIDR_IPV4="10.244.0.0/16" \
           "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -nse -rae -evpn -gm local
         # -ic: Install OVN-K from source
         # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
@@ -251,6 +252,7 @@ create_clusters() {
         # -rae: Route advertisements enable (auto-installs FRR-K8s)
         # -evpn: Enable EVPN support (activates VTEP controller for IP allocation)
         # -gm local: Local gateway mode (required for EVPN)
+        # NET_CIDR_IPV4: Pod CIDR for cluster1 (non-overlapping with cluster2)
         popd > /dev/null
 
         # Export kubeconfig
@@ -267,6 +269,7 @@ create_clusters() {
         pushd "$OVNK_CLONE_DIR" > /dev/null
         KIND_CLUSTER_NAME="$CLUSTER2_NAME" \
         KIND_NUM_WORKER="$NUM_WORKERS" \
+        NET_CIDR_IPV4="10.245.0.0/16" \
           "$KIND_SH" -wk "$NUM_WORKERS" -ic -mne -nse -rae -evpn -gm local
         # -ic: Install OVN-K from source
         # -mne: Multi-network enable (for UserDefinedNetwork/CUDN support)
@@ -274,6 +277,7 @@ create_clusters() {
         # -rae: Route advertisements enable (auto-installs FRR-K8s)
         # -evpn: Enable EVPN support (activates VTEP controller for IP allocation)
         # -gm local: Local gateway mode (required for EVPN)
+        # NET_CIDR_IPV4: Pod CIDR for cluster2 (non-overlapping with cluster1: 10.244.0.0/16)
         popd > /dev/null
 
         # Export kubeconfig
