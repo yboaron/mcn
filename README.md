@@ -16,7 +16,9 @@ Built on top of:
 
 ## Features
 
-- Multi-cluster connectivity for both default network and ClusterUserDefinedNetworks (CUDNs) via EVPN
+- **Multi-cluster connectivity** for both default network and ClusterUserDefinedNetworks (CUDNs)
+  - **Default Network**: BGP route advertisement for pod-to-pod connectivity (no overlay)
+  - **CUDNs**: EVPN-based Layer 2/Layer 3 network stretching for tenant isolation
 - Layer 2 (MAC-VRF) and Layer 3 (IP-VRF) network extension across clusters
 - VRF-based network isolation across clusters
 - Declarative CRD-based configuration
@@ -37,15 +39,36 @@ make deploy         # Takes ~7-8 minutes
 make verify-bgp
 ```
 
+### Test Default Network Connectivity
+
+```bash
+# Test default network pod connectivity across clusters (BGP route advertisement)
+make test-default-network
+
+# Cleanup default network test resources
+make cleanup-default
+```
+
+**How it works:**
+- Non-overlapping pod CIDRs configured automatically (cluster1: 10.244.0.0/16, cluster2: 10.245.0.0/16)
+- RouteAdvertisement CR tells OVN-K to advertise pod network routes via BGP
+- Direct IP routing - no EVPN/VXLAN overhead for default network
+- Uses same mechanism as OVN-K no-overlay mode, extended across clusters
+
 ### Test CUDN Stretching
 
 ```bash
-# Test Layer3 CUDN stretching across clusters
+# Test Layer3 CUDN stretching across clusters (EVPN-based)
 make test-cudn-l3   # Creates CUDN with EVPN, tests pod-to-pod connectivity
 
-# Cleanup test resources
+# Cleanup CUDN test resources
 make cleanup-cudn
 ```
+
+**How it works:**
+- EVPN provides Layer 2/Layer 3 VPN for network isolation
+- VNI allocation for tenant network separation
+- VXLAN overlay for CUDN traffic
 
 ### Available Commands
 
@@ -54,9 +77,54 @@ make cleanup-cudn
 - `make build-agent` - Build and load agent image
 - `make deploy-agents` - Deploy SkyNet agents
 - `make verify-bgp` - Verify BGP sessions
+- `make test-default-network` - Test default network cross-cluster connectivity
+- `make cleanup-default` - Clean default network test resources
 - `make test-cudn-l3` - Test CUDN EVPN stretching
 - `make cleanup-cudn` - Clean CUDN test resources
 - `make clean` - Delete all Kind clusters
+
+## Connectivity Modes
+
+SkyNet supports two types of cross-cluster connectivity:
+
+### 1. Default Network Connectivity (BGP Route Advertisement)
+
+**Use case:** Pod-to-pod communication on the default Kubernetes network across clusters
+
+**Technology:**
+- BGP IPv4 unicast route advertisement via OVN-K RouteAdvertisement CRD
+- Direct IP routing (no overlay encapsulation)
+- Non-overlapping pod CIDRs required
+
+**Advantages:**
+- Lower latency (no VXLAN overhead)
+- Simpler troubleshooting (standard IP routing)
+- Uses OVN-K's native no-overlay mode mechanism
+
+**How to use:**
+```bash
+make test-default-network
+```
+
+### 2. CUDN Stretching (EVPN-based)
+
+**Use case:** Tenant network isolation and Layer 2/Layer 3 VPN across clusters
+
+**Technology:**
+- EVPN (Ethernet VPN) for network isolation
+- VXLAN overlay for encapsulation
+- VNI allocation per tenant network
+- VRF-based multi-tenancy
+
+**Advantages:**
+- Network isolation (multi-tenancy)
+- Overlapping IP addresses supported
+- Layer 2 extension for VM migration
+
+**How to use:**
+```bash
+make test-cudn-l3
+```
 
 ## Architecture
 
@@ -79,6 +147,11 @@ This implementation includes temporary workarounds for upstream gaps:
 2. **FRR BGP listening address**: FRR-K8s configured to listen on `0.0.0.0` instead of `127.0.0.1`
    - Required for BGP peering between Kind container nodes
    - Production deployments use node IPs directly
+
+2a. **BGP neighbor disableMP setting**: SkyNet sets `disableMP: true` in FRRConfiguration neighbors
+   - Required for OVN-K RouteAdvertisement controller compatibility
+   - Allows RouteAdvertisement CRD to inject pod network routes
+   - When `disableMP: false`, FRR-K8s manages routes and blocks RouteAdvertisement controller
 
 3. **VTEP IP assignment**: Setup script manually assigns VTEP IPs to node loopback
    - OVN-K VTEP controller `Managed` mode not yet supported upstream
