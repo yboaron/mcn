@@ -186,8 +186,9 @@ func (c *BGPConfigurator) buildNeighborsForNode(nodeBgpPeerIP string, localClust
 		}
 
 		neighbor := map[string]interface{}{
-			"address": endpoint.BgpPeerIP,
-			"asn":     localCluster.Spec.ASN, // Same ASN = iBGP
+			"address":   endpoint.BgpPeerIP,
+			"asn":       localCluster.Spec.ASN, // Same ASN = iBGP
+			"disableMP": true,                  // Allow OVN-K RouteAdvertisement controller to manage routes
 			// Don't specify toAdvertise/toReceive - FRR-K8s will allow all routes by default
 		}
 
@@ -209,6 +210,7 @@ func (c *BGPConfigurator) buildNeighborsForNode(nodeBgpPeerIP string, localClust
 				"address":      endpoint.BgpPeerIP,
 				"asn":          remoteCluster.Spec.ASN, // Different ASN = eBGP
 				"ebgpMultiHop": true,
+				"disableMP":    true, // Allow OVN-K RouteAdvertisement controller to manage routes
 				// Don't specify toAdvertise/toReceive - FRR-K8s will allow all routes by default
 			}
 
