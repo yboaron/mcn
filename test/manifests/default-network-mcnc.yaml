@@ -1,0 +1,8 @@
+apiVersion: skynet.io/v1
+kind: MultiClusterNetworkConnect
+metadata:
+  name: extend-default-network
+spec:
+  # Extend the default Kubernetes pod network across clusters
+  # MCN agent will create RouteAdvertisement CR to advertise pod CIDRs via BGP
+  networkType: Default

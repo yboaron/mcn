@@ -84,38 +84,55 @@ fi
 log_info "✓ Pod CIDRs are non-overlapping ($C1_NETWORK.x.x vs $C2_NETWORK.x.x)"
 echo ""
 
-# Step 2: Apply RouteAdvertisement CR to both clusters
-log_step "Step 2: Creating RouteAdvertisement for default network pod routes..."
+# Step 2: Create MCNC to extend default network
+log_step "Step 2: Creating MCNC to extend default network across clusters..."
 
-RA_MANIFEST="${SCRIPT_DIR}/manifests/default-network-route-advertisement.yaml"
+MCNC_MANIFEST="${SCRIPT_DIR}/manifests/default-network-mcnc.yaml"
 
-if [ ! -f "$RA_MANIFEST" ]; then
-    log_error "RouteAdvertisement manifest not found: $RA_MANIFEST"
+if [ ! -f "$MCNC_MANIFEST" ]; then
+    log_error "MCNC manifest not found: $MCNC_MANIFEST"
     exit 1
 fi
 
-kubectl --kubeconfig="$KUBECONFIG_C1" apply -f "$RA_MANIFEST" > /dev/null 2>&1 || true
-kubectl --kubeconfig="$KUBECONFIG_C2" apply -f "$RA_MANIFEST" > /dev/null 2>&1 || true
+kubectl --kubeconfig="$KUBECONFIG_C1" apply -f "$MCNC_MANIFEST" > /dev/null 2>&1 || true
+kubectl --kubeconfig="$KUBECONFIG_C2" apply -f "$MCNC_MANIFEST" > /dev/null 2>&1 || true
 
-log_info "✓ RouteAdvertisement applied to both clusters"
+log_info "✓ MCNC applied to both clusters"
 
-# Wait for RouteAdvertisement to be accepted
-log_info "Waiting for RouteAdvertisement to be accepted (15s)..."
-sleep 15
+# Wait for MCN agent to create RouteAdvertisement
+log_info "Waiting for MCN agent to create RouteAdvertisement (20s)..."
+sleep 20
 
-RA_STATUS_C1=$(kubectl --kubeconfig="$KUBECONFIG_C1" get routeadvertisements default-network-pod-routes -o jsonpath='{.status.status}' 2>/dev/null || echo "Unknown")
-RA_STATUS_C2=$(kubectl --kubeconfig="$KUBECONFIG_C2" get routeadvertisements default-network-pod-routes -o jsonpath='{.status.status}' 2>/dev/null || echo "Unknown")
+# Check MCNC status
+MCNC_STATUS_C1=$(kubectl --kubeconfig="$KUBECONFIG_C1" get multiclusternetworkconnect extend-default-network -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+MCNC_STATUS_C2=$(kubectl --kubeconfig="$KUBECONFIG_C2" get multiclusternetworkconnect extend-default-network -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
 
-if [ "$RA_STATUS_C1" != "Accepted" ]; then
-    log_warn "Cluster1 RouteAdvertisement status: $RA_STATUS_C1 (expected: Accepted)"
+if [ "$MCNC_STATUS_C1" == "Connected" ]; then
+    log_info "✓ Cluster1 MCNC status: $MCNC_STATUS_C1"
 else
-    log_info "✓ Cluster1 RouteAdvertisement: $RA_STATUS_C1"
+    log_warn "Cluster1 MCNC status: $MCNC_STATUS_C1 (expected: Connected)"
 fi
 
-if [ "$RA_STATUS_C2" != "Accepted" ]; then
-    log_warn "Cluster2 RouteAdvertisement status: $RA_STATUS_C2 (expected: Accepted)"
+if [ "$MCNC_STATUS_C2" == "Connected" ]; then
+    log_info "✓ Cluster2 MCNC status: $MCNC_STATUS_C2"
 else
-    log_info "✓ Cluster2 RouteAdvertisement: $RA_STATUS_C2"
+    log_warn "Cluster2 MCNC status: $MCNC_STATUS_C2 (expected: Connected)"
+fi
+
+# Verify RouteAdvertisement was created by MCN agent
+RA_STATUS_C1=$(kubectl --kubeconfig="$KUBECONFIG_C1" get routeadvertisements default-network-pod-routes -o jsonpath='{.status.status}' 2>/dev/null || echo "NotFound")
+RA_STATUS_C2=$(kubectl --kubeconfig="$KUBECONFIG_C2" get routeadvertisements default-network-pod-routes -o jsonpath='{.status.status}' 2>/dev/null || echo "NotFound")
+
+if [ "$RA_STATUS_C1" == "Accepted" ]; then
+    log_info "✓ Cluster1 RouteAdvertisement: $RA_STATUS_C1 (created by MCN agent)"
+else
+    log_warn "Cluster1 RouteAdvertisement status: $RA_STATUS_C1"
+fi
+
+if [ "$RA_STATUS_C2" == "Accepted" ]; then
+    log_info "✓ Cluster2 RouteAdvertisement: $RA_STATUS_C2 (created by MCN agent)"
+else
+    log_warn "Cluster2 RouteAdvertisement status: $RA_STATUS_C2"
 fi
 echo ""
 
@@ -198,16 +215,18 @@ echo ""
 
 log_info "What was tested:"
 log_info "  ✓ Verified non-overlapping pod CIDRs ($C1_NETWORK.x.x vs $C2_NETWORK.x.x)"
-log_info "  ✓ Applied RouteAdvertisement CR (advertises PodNetwork for DefaultNetwork)"
+log_info "  ✓ Created MCNC with networkType: Default (consistent MCN API)"
+log_info "  ✓ MCN agent created RouteAdvertisement CR (advertises PodNetwork)"
 log_info "  ✓ OVN-K controller injected pod CIDR routes into FRRConfigurations"
 log_info "  ✓ BGP propagated routes across clusters (iBGP + eBGP)"
 log_info "  ✓ Cross-cluster pod connectivity on default network: WORKING"
 echo ""
 
 log_info "Key insights:"
+log_info "  • Consistent API: MCNC for both default and CUDN networks"
 log_info "  • No EVPN/VXLAN overhead - direct IP routing via BGP"
 log_info "  • Uses OVN-K RouteAdvertisement (same as no-overlay mode)"
-log_info "  • SkyNet FRRConfigurations have disableMP=true for compatibility"
+log_info "  • MCN FRRConfigurations have disableMP=true for compatibility"
 log_info "  • Each node advertises its local pod CIDR (/24) to all BGP neighbors"
 echo ""
 

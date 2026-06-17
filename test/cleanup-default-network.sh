@@ -34,9 +34,12 @@ log_info "Deleting test pods..."
 kubectl --kubeconfig="$KUBECONFIG_C1" delete pod test-pod-default-c1 --ignore-not-found > /dev/null 2>&1 || true
 kubectl --kubeconfig="$KUBECONFIG_C2" delete pod test-pod-default-c2 --ignore-not-found > /dev/null 2>&1 || true
 
-# Delete RouteAdvertisement CRs
-log_info "Deleting RouteAdvertisement CRs..."
-kubectl --kubeconfig="$KUBECONFIG_C1" delete routeadvertisements default-network-pod-routes --ignore-not-found > /dev/null 2>&1 || true
-kubectl --kubeconfig="$KUBECONFIG_C2" delete routeadvertisements default-network-pod-routes --ignore-not-found > /dev/null 2>&1 || true
+# Delete MCNC (MCN agent will clean up RouteAdvertisement automatically)
+log_info "Deleting MCNC (triggers automatic RouteAdvertisement cleanup)..."
+kubectl --kubeconfig="$KUBECONFIG_C1" delete multiclusternetworkconnect extend-default-network --ignore-not-found > /dev/null 2>&1 || true
+kubectl --kubeconfig="$KUBECONFIG_C2" delete multiclusternetworkconnect extend-default-network --ignore-not-found > /dev/null 2>&1 || true
+
+# Wait for cleanup
+sleep 5
 
 log_info "✓ Cleanup complete"

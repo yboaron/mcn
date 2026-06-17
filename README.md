@@ -92,19 +92,6 @@ make cleanup-cudn
 - VXLAN overlay encapsulates CUDN traffic between clusters
 - Supports overlapping IP addresses across tenants
 
-### Available Commands
-
-- `make deploy` - Fresh deployment (clusters + BGP + agents)
-- `make clusters` - Create Kind clusters only
-- `make build-agent` - Build and load agent image
-- `make deploy-agents` - Deploy MCN agents
-- `make verify-bgp` - Verify BGP sessions
-- `make test-default-network` - Test default network cross-cluster connectivity
-- `make cleanup-default` - Clean default network test resources
-- `make test-cudn-l3` - Test CUDN EVPN stretching
-- `make cleanup-cudn` - Clean CUDN test resources
-- `make clean` - Delete all Kind clusters
-
 ## Connectivity Modes
 
 MCN supports two types of cross-cluster connectivity:
