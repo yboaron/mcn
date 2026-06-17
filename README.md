@@ -1,8 +1,10 @@
-# Skynet - OVN-Kubernetes Multi-Cluster Networking (MCN)
+# OVN-Kubernetes Multi-Cluster Networking (MCN)
 
 ## Project Goal
 
-Our goal is to release a dev preview version of the OVN-Kubernetes Multi-Cluster Networking (MCN) solution based on BGP/EVPN. This solution targets customers seeking a simplified, declarative approach to connecting multiple OCP clusters via EVPN with minimal manual BGP configuration. The solution supports extending both the default network and ClusterUserDefinedNetworks (CUDNs) across clusters, with connectivity options for public-to-public (e.g., multi-region cloud deployments), public-to-private hybrid scenarios (e.g., connecting on-premises clusters to cloud-based OCP installations), and private-to-private connectivity (e.g., multiple on-premises datacenter clusters).
+Our goal is to release a dev preview version of the OVN-Kubernetes Multi-Cluster Networking (MCN) solution based on BGP/EVPN. This solution targets customers seeking a simplified, declarative approach to connecting multiple OCP clusters with minimal manual BGP configuration. The solution supports extending both the default network (via BGP route advertisement) and ClusterUserDefinedNetworks (CUDNs via EVPN) across clusters.
+
+**PoC Scope**: This proof-of-concept assumes **trusted network connectivity** between cluster nodes (direct IP reachability). BGP sessions and EVPN tunnels are established over this trusted network without encryption or additional security layers.
 
 ## Status
 
@@ -19,20 +21,37 @@ Built on top of:
 - **Multi-cluster connectivity** for both default network and ClusterUserDefinedNetworks (CUDNs)
   - **Default Network**: BGP route advertisement for pod-to-pod connectivity (no overlay)
   - **CUDNs**: EVPN-based Layer 2/Layer 3 network stretching for tenant isolation
-- Layer 2 (MAC-VRF) and Layer 3 (IP-VRF) network extension across clusters
-- VRF-based network isolation across clusters
+- Layer 2 (MAC-VRF) and Layer 3 (IP-VRF) network extension across clusters (CUDN stretching)
+- VRF-based network isolation across clusters (multi-tenancy via CUDNs)
 - Declarative CRD-based configuration
-- Integration with existing datacenter EVPN/BGP fabrics
-- Support for VM migration scenarios via Layer 2 extension
-- Public-to-public, public-to-private, and private-to-private cluster connectivity
-- Minimal manual BGP configuration required
+- BGP full mesh established automatically between cluster nodes
+- Direct IP routing for default network (no overlay encapsulation)
+- EVPN/VXLAN overlay for CUDN tenant networks
+- Support for VM migration scenarios via Layer 2 CUDN extension
+- Minimal manual configuration required (automated BGP session setup)
+
+## Network Requirements
+
+This PoC requires:
+- **Direct IP connectivity** between all cluster nodes (trusted network)
+- **Non-overlapping pod CIDRs** across clusters for default network connectivity
+  - Example: cluster1 uses 10.244.0.0/16, cluster2 uses 10.245.0.0/16
+  - Configured automatically in the test environment
+- **BGP port (TCP 179)** reachable between cluster nodes
+- No NAT between cluster nodes (direct routing)
+
+**Note**: Production deployments may require additional security measures such as:
+- IPsec/WireGuard for encrypted tunnels between clusters
+- BGP session authentication (MD5/TCP-AO)
+- Network segmentation and firewall rules
+- These are out of scope for this PoC
 
 ## Quick Start
 
 ### Deploy Test Environment
 
 ```bash
-# Deploy 2 Kind clusters with OVN-K, FRR-K8s, and SkyNet agents
+# Deploy 2 Kind clusters with OVN-K, FRR-K8s, and MCN agents
 make deploy         # Takes ~7-8 minutes
 
 # Verify BGP sessions established
@@ -51,9 +70,10 @@ make cleanup-default
 
 **How it works:**
 - Non-overlapping pod CIDRs configured automatically (cluster1: 10.244.0.0/16, cluster2: 10.245.0.0/16)
+- BGP full mesh established between all cluster nodes (over trusted network)
 - RouteAdvertisement CR tells OVN-K to advertise pod network routes via BGP
-- Direct IP routing - no EVPN/VXLAN overhead for default network
-- Uses same mechanism as OVN-K no-overlay mode, extended across clusters
+- Direct IP routing between clusters - no overlay encapsulation
+- Uses same mechanism as OVN-K no-overlay mode, extended across clusters via BGP
 
 ### Test CUDN Stretching
 
@@ -66,16 +86,18 @@ make cleanup-cudn
 ```
 
 **How it works:**
-- EVPN provides Layer 2/Layer 3 VPN for network isolation
+- BGP full mesh carries EVPN routes (over trusted network)
+- EVPN provides Layer 2/Layer 3 VPN for tenant network isolation
 - VNI allocation for tenant network separation
-- VXLAN overlay for CUDN traffic
+- VXLAN overlay encapsulates CUDN traffic between clusters
+- Supports overlapping IP addresses across tenants
 
 ### Available Commands
 
 - `make deploy` - Fresh deployment (clusters + BGP + agents)
 - `make clusters` - Create Kind clusters only
 - `make build-agent` - Build and load agent image
-- `make deploy-agents` - Deploy SkyNet agents
+- `make deploy-agents` - Deploy MCN agents
 - `make verify-bgp` - Verify BGP sessions
 - `make test-default-network` - Test default network cross-cluster connectivity
 - `make cleanup-default` - Clean default network test resources
@@ -85,7 +107,7 @@ make cleanup-cudn
 
 ## Connectivity Modes
 
-SkyNet supports two types of cross-cluster connectivity:
+MCN supports two types of cross-cluster connectivity:
 
 ### 1. Default Network Connectivity (BGP Route Advertisement)
 
@@ -128,7 +150,7 @@ make test-cudn-l3
 
 ## Architecture
 
-The SkyNet agent runs in each cluster and handles:
+The MCN agent runs in each cluster and handles:
 - **MCNC Controller**: Reconciles MultiClusterNetworkConnect resources
 - **CUDN Integrator**: Patches EVPN config into user-created CUDNs or creates new CUDNs
 - **RouteAdvertisement Creator**: Triggers OVN-K BGP route advertisement
@@ -140,7 +162,7 @@ The SkyNet agent runs in each cluster and handles:
 
 This implementation includes temporary workarounds for upstream gaps:
 
-1. **OVN-K fork required**: Uses `yboaron/ovn-kubernetes:skynet-evpn-base`
+1. **OVN-K fork required**: Uses `yboaron/ovn-kubernetes:skynet-evpn-base` (temporary branch name)
    - Removes CUDN `spec.network` immutability to allow EVPN patching
    - Fixes node subnet annotation during network Sync()
 
@@ -148,7 +170,7 @@ This implementation includes temporary workarounds for upstream gaps:
    - Required for BGP peering between Kind container nodes
    - Production deployments use node IPs directly
 
-2a. **BGP neighbor disableMP setting**: SkyNet sets `disableMP: true` in FRRConfiguration neighbors
+2a. **BGP neighbor disableMP setting**: MCN agent sets `disableMP: true` in FRRConfiguration neighbors
    - Required for OVN-K RouteAdvertisement controller compatibility
    - Allows RouteAdvertisement CRD to inject pod network routes
    - When `disableMP: false`, FRR-K8s manages routes and blocks RouteAdvertisement controller
