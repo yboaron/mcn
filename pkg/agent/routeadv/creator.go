@@ -146,7 +146,95 @@ func (c *Creator) DeleteForCUDN(ctx context.Context, cudnName string) error {
 	return nil
 }
 
-// ListForCluster lists all RouteAdvertisements managed by this cluster's SkyNet agent
+// CreateForDefaultNetwork creates a RouteAdvertisement CR for the default pod network
+// This triggers OVN-K to advertise node pod CIDRs via BGP for cross-cluster connectivity
+func (c *Creator) CreateForDefaultNetwork(ctx context.Context, mcncName string) error {
+	raName := "default-network-pod-routes"
+	klog.Infof("Creating RouteAdvertisement %s for default network (MCNC: %s)", raName, mcncName)
+
+	// Check if RouteAdvertisement already exists
+	existing, err := c.dynamicClient.Resource(routeAdvGVR).Get(ctx, raName, metav1.GetOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to check existing RouteAdvertisement: %w", err)
+	}
+
+	if existing != nil {
+		klog.V(4).Infof("RouteAdvertisement %s already exists, skipping creation", raName)
+		return nil
+	}
+
+	// Build RouteAdvertisement spec for default network
+	ra := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "k8s.ovn.org/v1",
+			"kind":       "RouteAdvertisements",
+			"metadata": map[string]interface{}{
+				"name": raName,
+				"labels": map[string]interface{}{
+					"skynet.io/cluster":      c.clusterName,
+					"skynet.io/network-type": "default",
+					"skynet.io/managed-by":   "skynet-agent",
+					"skynet.io/mcnc":         mcncName,
+				},
+			},
+			"spec": map[string]interface{}{
+				// Select the default Kubernetes network
+				"networkSelectors": []interface{}{
+					map[string]interface{}{
+						"networkSelectionType": "DefaultNetwork",
+					},
+				},
+				// Empty nodeSelector matches all nodes (required for PodNetwork advertisement)
+				"nodeSelector": map[string]interface{}{},
+				// Match FRRConfiguration created by MCN agent (with disableMP: true)
+				"frrConfigurationSelector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"skynet.io/config-type": "per-node",
+					},
+				},
+				// Advertise pod network routes (each node's pod CIDR)
+				"advertisements": []interface{}{
+					"PodNetwork",
+				},
+			},
+		},
+	}
+
+	// Create the RouteAdvertisement
+	_, err = c.dynamicClient.Resource(routeAdvGVR).Create(ctx, ra, metav1.CreateOptions{})
+	if err != nil {
+		if errors.IsAlreadyExists(err) {
+			klog.V(4).Infof("RouteAdvertisement %s already exists (race condition)", raName)
+			return nil
+		}
+		return fmt.Errorf("failed to create RouteAdvertisement: %w", err)
+	}
+
+	klog.Infof("Successfully created RouteAdvertisement %s for default network", raName)
+	klog.V(4).Infof("  RouteAdvertisement will trigger OVN-K to advertise pod CIDRs via BGP")
+	klog.V(4).Infof("  Each node will advertise its local pod CIDR to BGP neighbors")
+	return nil
+}
+
+// DeleteForDefaultNetwork removes the RouteAdvertisement for default network (cleanup on disconnect)
+func (c *Creator) DeleteForDefaultNetwork(ctx context.Context) error {
+	raName := "default-network-pod-routes"
+	klog.Infof("Deleting RouteAdvertisement %s for default network", raName)
+
+	err := c.dynamicClient.Resource(routeAdvGVR).Delete(ctx, raName, metav1.DeleteOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			klog.V(4).Infof("RouteAdvertisement %s not found, nothing to clean up", raName)
+			return nil
+		}
+		return fmt.Errorf("failed to delete RouteAdvertisement: %w", err)
+	}
+
+	klog.Infof("Successfully deleted RouteAdvertisement %s", raName)
+	return nil
+}
+
+// ListForCluster lists all RouteAdvertisements managed by this cluster's MCN agent
 func (c *Creator) ListForCluster(ctx context.Context) ([]string, error) {
 	list, err := c.dynamicClient.Resource(routeAdvGVR).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("skynet.io/cluster=%s,skynet.io/managed-by=skynet-agent", c.clusterName),

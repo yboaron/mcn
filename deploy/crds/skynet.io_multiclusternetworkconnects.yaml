@@ -244,15 +244,22 @@ spec:
                   - type
                   type: object
                 type: array
+              networkType:
+                description: NetworkType indicates which type of network was extended
+                  (Default or CUDN)
+                type: string
               phase:
                 description: Phase represents the current state of the connection
                 type: string
               routeTarget:
-                description: RouteTarget is the route target for this multi-cluster
-                  network
+                description: |-
+                  RouteTarget is the route target for this multi-cluster network
+                  Only applicable when NetworkType: CUDN
                 type: string
               vni:
-                description: VNI is the allocated VNI for this multi-cluster network
+                description: |-
+                  VNI is the allocated VNI for this multi-cluster network
+                  Only applicable when NetworkType: CUDN
                 format: int32
                 type: integer
             type: object

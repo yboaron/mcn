@@ -406,11 +406,17 @@ type MultiClusterNetworkConnectStatus struct {
 	// +optional
 	Phase MultiClusterNetworkConnectPhase `json:"phase,omitempty"`
 
+	// NetworkType indicates which type of network was extended (Default or CUDN)
+	// +optional
+	NetworkType string `json:"networkType,omitempty"`
+
 	// VNI is the allocated VNI for this multi-cluster network
+	// Only applicable when NetworkType: CUDN
 	// +optional
 	VNI uint32 `json:"vni,omitempty"`
 
 	// RouteTarget is the route target for this multi-cluster network
+	// Only applicable when NetworkType: CUDN
 	// +optional
 	RouteTarget string `json:"routeTarget,omitempty"`
 

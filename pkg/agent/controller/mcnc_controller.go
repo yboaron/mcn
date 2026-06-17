@@ -108,11 +108,62 @@ func (r *MCNCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 // reconcileMCNC reconciles a MultiClusterNetworkConnect
 func (r *MCNCReconciler) reconcileMCNC(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
+	// Determine network type (default to CUDN for backward compatibility)
+	networkType := mcnc.Spec.NetworkType
+	if networkType == "" {
+		networkType = skynetv1.NetworkTypeCUDN
+	}
+
+	klog.V(2).Infof("Reconciling MCNC %s/%s with networkType: %s", mcnc.Namespace, mcnc.Name, networkType)
+
+	// Branch based on network type
+	switch networkType {
+	case skynetv1.NetworkTypeDefault:
+		return r.reconcileDefaultNetwork(ctx, mcnc)
+	case skynetv1.NetworkTypeCUDN:
+		return r.reconcileCUDNNetwork(ctx, mcnc)
+	default:
+		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
+		if updateErr := r.Status().Update(ctx, mcnc); updateErr != nil {
+			klog.Errorf("Failed to update MCNC status: %v", updateErr)
+		}
+		return reconcile.Result{}, errors.Errorf("unsupported networkType: %s", networkType)
+	}
+}
+
+// reconcileDefaultNetwork handles networkType: Default
+// Creates RouteAdvertisement CR to advertise default pod network routes via BGP
+func (r *MCNCReconciler) reconcileDefaultNetwork(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
+	klog.Infof("Reconciling MCNC %s/%s for default network extension", mcnc.Namespace, mcnc.Name)
+
+	// Create RouteAdvertisement for default network
+	if err := r.RouteAdvCreator.CreateForDefaultNetwork(ctx, mcnc.Name); err != nil {
+		klog.Errorf("RouteAdvertisement creation failed for default network: %v", err)
+		mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseError
+		if updateErr := r.Status().Update(ctx, mcnc); updateErr != nil {
+			klog.Errorf("Failed to update MCNC status: %v", updateErr)
+		}
+		return reconcile.Result{}, errors.Wrap(err, "failed to create RouteAdvertisement for default network")
+	}
+
+	// Update status to connected
+	mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseConnected
+	mcnc.Status.NetworkType = string(skynetv1.NetworkTypeDefault)
+	if err := r.Status().Update(ctx, mcnc); err != nil {
+		return reconcile.Result{}, errors.Wrap(err, "failed to update MCNC status")
+	}
+
+	klog.Infof("Successfully reconciled MCNC %s/%s for default network", mcnc.Namespace, mcnc.Name)
+	return reconcile.Result{}, nil
+}
+
+// reconcileCUDNNetwork handles networkType: CUDN (existing logic)
+func (r *MCNCReconciler) reconcileCUDNNetwork(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
 	mcnName := ""
 	if mcnc.Spec.CreateMultiClusterNetwork != nil {
 		mcnName = mcnc.Spec.CreateMultiClusterNetwork.Name
 	}
-	klog.V(2).Infof("Reconciling MCNC %s/%s for MCN %s", mcnc.Namespace, mcnc.Name, mcnName)
+	klog.V(2).Infof("Reconciling MCNC %s/%s for CUDN MCN %s", mcnc.Namespace, mcnc.Name, mcnName)
 
 	// Step 1: Verify namespace exists
 	ns, err := r.K8sClient.CoreV1().Namespaces().Get(ctx, mcnc.Namespace, metav1.GetOptions{})
@@ -156,11 +207,12 @@ func (r *MCNCReconciler) reconcileMCNC(ctx context.Context, mcnc *skynetv1.Multi
 
 	// Update status to connected
 	mcnc.Status.Phase = skynetv1.MultiClusterNetworkConnectPhaseConnected
+	mcnc.Status.NetworkType = string(skynetv1.NetworkTypeCUDN)
 	if err := r.Status().Update(ctx, mcnc); err != nil {
 		return reconcile.Result{}, errors.Wrap(err, "failed to update MCNC status")
 	}
 
-	klog.Infof("Successfully reconciled MCNC %s/%s", mcnc.Namespace, mcnc.Name)
+	klog.Infof("Successfully reconciled MCNC %s/%s for CUDN", mcnc.Namespace, mcnc.Name)
 	return reconcile.Result{}, nil
 }
 
@@ -306,6 +358,42 @@ func (r *MCNCReconciler) buildUDNSpec(mcn *skynetv1.MultiClusterNetwork, namespa
 func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
 	klog.Infof("Handling deletion of MCNC %s/%s", mcnc.Namespace, mcnc.Name)
 
+	// Determine network type
+	networkType := mcnc.Spec.NetworkType
+	if networkType == "" {
+		networkType = skynetv1.NetworkTypeCUDN
+	}
+
+	// Branch based on network type
+	switch networkType {
+	case skynetv1.NetworkTypeDefault:
+		return r.handleDeleteDefaultNetwork(ctx, mcnc)
+	case skynetv1.NetworkTypeCUDN:
+		return r.handleDeleteCUDNNetwork(ctx, mcnc)
+	default:
+		klog.Warningf("MCNC %s/%s has unknown networkType %s, removing finalizer", mcnc.Namespace, mcnc.Name, networkType)
+		return r.removeFinalizer(ctx, mcnc)
+	}
+}
+
+// handleDeleteDefaultNetwork handles deletion of MCNC with networkType: Default
+func (r *MCNCReconciler) handleDeleteDefaultNetwork(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
+	klog.Infof("Handling deletion of default network MCNC %s/%s", mcnc.Namespace, mcnc.Name)
+
+	// Delete RouteAdvertisement for default network
+	if err := r.RouteAdvCreator.DeleteForDefaultNetwork(ctx); err != nil {
+		klog.Errorf("Failed to delete RouteAdvertisement for default network: %v", err)
+		// Continue cleanup even if deletion fails
+	}
+
+	// Remove finalizer to allow MCNC deletion
+	return r.removeFinalizer(ctx, mcnc)
+}
+
+// handleDeleteCUDNNetwork handles deletion of MCNC with networkType: CUDN
+func (r *MCNCReconciler) handleDeleteCUDNNetwork(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
+	klog.Infof("Handling deletion of CUDN MCNC %s/%s", mcnc.Namespace, mcnc.Name)
+
 	// For deletion, we need to find the MCN name from the spec
 	var mcnName string
 	if mcnc.Spec.CreateMultiClusterNetwork != nil {
@@ -316,21 +404,14 @@ func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiC
 
 	if mcnName == "" {
 		// If name not set, nothing to clean up
-		klog.Warningf("MCNC %s/%s has no MCN name, skipping cleanup", mcnc.Namespace, mcnc.Name)
-		// Still remove finalizer to allow deletion
-		if containsString(mcnc.Finalizers, mcncFinalizerName) {
-			mcnc.Finalizers = removeString(mcnc.Finalizers, mcncFinalizerName)
-			if err := r.Update(ctx, mcnc); err != nil {
-				return reconcile.Result{}, errors.Wrap(err, "failed to remove finalizer from MCNC")
-			}
-		}
-		return reconcile.Result{}, nil
+		klog.Warningf("CUDN MCNC %s/%s has no MCN name, skipping cleanup", mcnc.Namespace, mcnc.Name)
+		return r.removeFinalizer(ctx, mcnc)
 	}
 
 	// Determine the CUDN name
 	var cudnName string
 	if mcnc.Spec.CUDNSpec != nil {
-		// SkyNet created the CUDN - determine its name
+		// MCN agent created the CUDN - determine its name
 		cudnName = mcnc.Spec.CUDNSpec.Name
 		if cudnName == "" {
 			cudnName = mcnName
@@ -349,9 +430,9 @@ func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiC
 		// Continue cleanup even if RouteAdvertisement deletion fails
 	}
 
-	// Step 2: Delete CUDN if SkyNet created it
+	// Step 2: Delete CUDN if MCN agent created it
 	if mcnc.Spec.CUDNSpec != nil {
-		// SkyNet created this CUDN - delete it
+		// MCN agent created this CUDN - delete it
 		if err := r.CUDNIntegrator.DeleteCUDN(ctx, cudnName); err != nil {
 			klog.Errorf("Failed to delete CUDN %s: %v", cudnName, err)
 			// Continue cleanup even if CUDN deletion fails
@@ -365,6 +446,11 @@ func (r *MCNCReconciler) handleDelete(ctx context.Context, mcnc *skynetv1.MultiC
 	}
 
 	// Step 4: Remove finalizer from MCNC to allow deletion
+	return r.removeFinalizer(ctx, mcnc)
+}
+
+// removeFinalizer removes the MCN finalizer from MCNC to allow deletion
+func (r *MCNCReconciler) removeFinalizer(ctx context.Context, mcnc *skynetv1.MultiClusterNetworkConnect) (ctrl.Result, error) {
 	if containsString(mcnc.Finalizers, mcncFinalizerName) {
 		mcnc.Finalizers = removeString(mcnc.Finalizers, mcncFinalizerName)
 		if err := r.Update(ctx, mcnc); err != nil {
