@@ -290,8 +290,9 @@ type MultiClusterNetworkList struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:resource:scope=Namespaced,shortName=mcnc
 
-// MultiClusterNetworkConnect is applied locally to connect a CUDN to a multi-cluster network.
-// SkyNet agent watches this CR and handles the connection.
+// MultiClusterNetworkConnect is applied locally to connect a network across clusters.
+// Supports both CUDN (tenant networks via EVPN) and Default network (pod CIDRs via BGP).
+// MCN agent watches this CR and handles the connection.
 type MultiClusterNetworkConnect struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -299,25 +300,50 @@ type MultiClusterNetworkConnect struct {
 	Status            MultiClusterNetworkConnectStatus `json:"status,omitempty"`
 }
 
+// NetworkType defines the type of network to extend across clusters
+// +kubebuilder:validation:Enum=Default;CUDN
+type NetworkType string
+
+const (
+	// NetworkTypeDefault extends the default Kubernetes pod network across clusters via BGP route advertisement
+	NetworkTypeDefault NetworkType = "Default"
+	// NetworkTypeCUDN extends ClusterUserDefinedNetworks across clusters via EVPN
+	NetworkTypeCUDN NetworkType = "CUDN"
+)
+
 type MultiClusterNetworkConnectSpec struct {
+	// NetworkType specifies which type of network to extend across clusters
+	// - Default: Advertise default pod network routes via BGP (requires non-overlapping pod CIDRs)
+	// - CUDN: Extend ClusterUserDefinedNetwork via EVPN (supports overlapping IPs, VRF isolation)
+	// Defaults to CUDN for backward compatibility
+	// +optional
+	// +kubebuilder:default=CUDN
+	NetworkType NetworkType `json:"networkType,omitempty"`
+
+	// --- Fields below apply only when NetworkType: CUDN ---
+
 	// LocalCUDN is the name of an existing local CUDN to connect
 	// Mutually exclusive with CUDNSpec
+	// Only applies when NetworkType: CUDN
 	// +optional
 	LocalCUDN string `json:"localCUDN,omitempty"`
 
-	// CUDNSpec specifies the CUDN to be created by SkyNet
+	// CUDNSpec specifies the CUDN to be created by MCN agent
 	// Mutually exclusive with LocalCUDN
-	// SkyNet will create the CUDN with EVPN configuration
+	// MCN agent will create the CUDN with EVPN configuration
+	// Only applies when NetworkType: CUDN
 	// +optional
 	CUDNSpec *CUDNSpec `json:"cudnSpec,omitempty"`
 
 	// MultiClusterNetworkName is the name of the MultiClusterNetwork to join
 	// Mutually exclusive with CreateMultiClusterNetwork
+	// Only applies when NetworkType: CUDN
 	// +optional
 	MultiClusterNetworkName string `json:"multiClusterNetworkName,omitempty"`
 
 	// CreateMultiClusterNetwork specifies parameters for creating a new multi-cluster network
 	// Mutually exclusive with MultiClusterNetworkName
+	// Only applies when NetworkType: CUDN
 	// +optional
 	CreateMultiClusterNetwork *CreateMultiClusterNetworkParams `json:"createMultiClusterNetwork,omitempty"`
 }
